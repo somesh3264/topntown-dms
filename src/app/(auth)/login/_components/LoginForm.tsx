@@ -1,95 +1,134 @@
 // src/app/(auth)/login/_components/LoginForm.tsx
+// ---------------------------------------------------------------------------
+// Client component — owns form state, calls the signIn server action, and
+// performs the role-based client-side redirect after a successful sign-in.
+// ---------------------------------------------------------------------------
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
+import { Loader2 } from "lucide-react";
 
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { signIn, ROLE_REDIRECT } from "../actions";
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
 export default function LoginForm() {
   const router = useRouter();
-  const supabase = createClient();
 
-  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
 
-  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    setLoading(true);
-    setError(null);
+  // useTransition gives us isPending without managing a separate loading flag
+  const [isPending, startTransition] = useTransition();
 
-    const { data, error: signInError } =
-      await supabase.auth.signInWithPassword({ email, password });
-
-    if (signInError) {
-      setError(signInError.message);
-      setLoading(false);
-      return;
-    }
-
-    // TODO: inspect user role from data.user.app_metadata or a profiles table
-    // and redirect accordingly:
-    //   Super Admin / SS / Sales Person → /dashboard
-    //   Distributor                     → /app
-    const role = (data.user?.app_metadata?.role as string) ?? "distributor";
-    router.push(role === "distributor" ? "/app" : "/dashboard");
-    router.refresh();
+  // ── Phone input helpers ──────────────────────────────────────────────────
+  /** Strip non-digits and cap at 10 characters (Indian mobile). */
+  function handlePhoneChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const digits = e.target.value.replace(/\D/g, "").slice(0, 10);
+    setPhone(digits);
   }
 
+  // ── Form submit ──────────────────────────────────────────────────────────
+  function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    setError(null);
+
+    startTransition(async () => {
+      const result = await signIn(phone, password);
+
+      if ("error" in result) {
+        setError(result.error);
+        return;
+      }
+
+      // Redirect based on role returned by the server action
+      const destination = ROLE_REDIRECT[result.role] ?? "/dashboard";
+      router.push(destination);
+      router.refresh(); // ensure server components re-render with new session
+    });
+  }
+
+  // ── Render ───────────────────────────────────────────────────────────────
   return (
-    <form onSubmit={handleSubmit} className="space-y-5">
-      <div className="space-y-1">
-        <label
-          htmlFor="email"
-          className="block text-sm font-medium text-foreground"
-        >
-          Email address
-        </label>
-        <input
-          id="email"
-          type="email"
-          autoComplete="email"
-          required
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-          placeholder="you@example.com"
-        />
+    <form onSubmit={handleSubmit} className="space-y-5" noValidate>
+
+      {/* ── Phone number field ─────────────────────────────────────────── */}
+      <div className="space-y-1.5">
+        <Label htmlFor="phone">Phone Number</Label>
+
+        {/* Inline +91 prefix */}
+        <div className="flex">
+          <span
+            className="inline-flex items-center rounded-l-md border border-r-0 border-input bg-muted px-3 text-sm text-muted-foreground select-none"
+            aria-hidden="true"
+          >
+            +91
+          </span>
+          <Input
+            id="phone"
+            type="tel"
+            inputMode="numeric"
+            autoComplete="tel-national"
+            required
+            maxLength={10}
+            placeholder="98765 43210"
+            value={phone}
+            onChange={handlePhoneChange}
+            disabled={isPending}
+            className="rounded-l-none"
+            aria-describedby={error ? "login-error" : undefined}
+          />
+        </div>
       </div>
 
-      <div className="space-y-1">
-        <label
-          htmlFor="password"
-          className="block text-sm font-medium text-foreground"
-        >
-          Password
-        </label>
-        <input
+      {/* ── Password field ─────────────────────────────────────────────── */}
+      <div className="space-y-1.5">
+        <Label htmlFor="password">Password</Label>
+        <Input
           id="password"
           type="password"
           autoComplete="current-password"
           required
+          placeholder="••••••••"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-          placeholder="••••••••"
+          disabled={isPending}
+          aria-describedby={error ? "login-error" : undefined}
         />
       </div>
 
+      {/* ── Error banner ───────────────────────────────────────────────── */}
       {error && (
-        <p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+        <p
+          id="login-error"
+          role="alert"
+          className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive"
+        >
           {error}
         </p>
       )}
 
-      <button
+      {/* ── Submit button ──────────────────────────────────────────────── */}
+      <Button
         type="submit"
-        disabled={loading}
-        className="w-full rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+        disabled={isPending || phone.length < 10 || password.length < 1}
+        className="w-full"
       >
-        {loading ? "Signing in…" : "Sign in"}
-      </button>
+        {isPending ? (
+          <>
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
+            Signing in…
+          </>
+        ) : (
+          "Login"
+        )}
+      </Button>
     </form>
   );
 }
