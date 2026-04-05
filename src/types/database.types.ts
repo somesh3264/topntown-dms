@@ -24,6 +24,72 @@ export interface Database {
   public: {
     Tables: {
       // -----------------------------------------------------------------------
+      // zones — top-level geographic regions
+      // -----------------------------------------------------------------------
+      zones: {
+        Row: {
+          id: string;
+          name: string;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          name: string;
+          created_at?: string;
+        };
+        Update: {
+          name?: string;
+        };
+      };
+
+      // -----------------------------------------------------------------------
+      // areas — sub-divisions within a zone
+      // -----------------------------------------------------------------------
+      areas: {
+        Row: {
+          id: string;
+          name: string;
+          zone_id: string;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          name: string;
+          zone_id: string;
+          created_at?: string;
+        };
+        Update: {
+          name?: string;
+          zone_id?: string;
+        };
+      };
+
+      // -----------------------------------------------------------------------
+      // ss_networks — maps super-stockists to distributors (1 SS : many Dist,
+      // but each distributor belongs to exactly one SS)
+      // -----------------------------------------------------------------------
+      ss_networks: {
+        Row: {
+          id: string;
+          super_stockist_id: string;
+          distributor_id: string;
+          assigned_at: string;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          super_stockist_id: string;
+          distributor_id: string;
+          assigned_at?: string;
+          created_at?: string;
+        };
+        Update: {
+          super_stockist_id?: string;
+          distributor_id?: string;
+        };
+      };
+
+      // -----------------------------------------------------------------------
       // profiles — one row per auth.users row.
       // Role controls which UI shell the user lands in after login.
       // -----------------------------------------------------------------------
@@ -31,22 +97,276 @@ export interface Database {
         Row: {
           id: string; // FK → auth.users.id
           full_name: string | null;
-          role: "super_admin" | "sales_supervisor" | "sales_person" | "distributor";
+          phone: string | null;
+          role: "super_admin" | "super_stockist" | "sales_person" | "distributor";
+          zone_id: string | null;
+          area_id: string | null;
+          is_active: boolean;
           created_at: string;
-          updated_at: string;
         };
         Insert: {
           id: string;
           full_name?: string | null;
-          role: "super_admin" | "sales_supervisor" | "sales_person" | "distributor";
+          phone?: string | null;
+          role: "super_admin" | "super_stockist" | "sales_person" | "distributor";
+          zone_id?: string | null;
+          area_id?: string | null;
+          is_active?: boolean;
           created_at?: string;
-          updated_at?: string;
         };
         Update: {
           id?: string;
           full_name?: string | null;
-          role?: "super_admin" | "sales_supervisor" | "sales_person" | "distributor";
+          phone?: string | null;
+          role?: "super_admin" | "super_stockist" | "sales_person" | "distributor";
+          zone_id?: string | null;
+          area_id?: string | null;
+          is_active?: boolean;
+        };
+      };
+
+      // -----------------------------------------------------------------------
+      // products — SKU master table
+      // -----------------------------------------------------------------------
+      products: {
+        Row: {
+          id: string;
+          name: string;
+          category: "Bread" | "Biscuits" | "Cakes" | "Rusk" | "Other";
+          mrp: number;
+          base_price: number | null;
+          weight_size: string;
+          tax_rate: number;
+          is_active: boolean;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          name: string;
+          category: "Bread" | "Biscuits" | "Cakes" | "Rusk" | "Other";
+          mrp: number;
+          base_price?: number | null;
+          weight_size?: string;
+          tax_rate?: number;
+          is_active?: boolean;
+          created_at?: string;
           updated_at?: string;
+        };
+        Update: {
+          name?: string;
+          category?: "Bread" | "Biscuits" | "Cakes" | "Rusk" | "Other";
+          mrp?: number;
+          base_price?: number | null;
+          weight_size?: string;
+          tax_rate?: number;
+          is_active?: boolean;
+          updated_at?: string;
+        };
+      };
+
+      // -----------------------------------------------------------------------
+      // price_overrides — per-distributor or per-retailer price overrides
+      // -----------------------------------------------------------------------
+      price_overrides: {
+        Row: {
+          id: string;
+          product_id: string;
+          tier: "distributor" | "retailer";
+          user_id: string;
+          price: number;
+          effective_from: string;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          product_id: string;
+          tier: "distributor" | "retailer";
+          user_id: string;
+          price: number;
+          effective_from: string;
+          created_at?: string;
+        };
+        Update: {
+          price?: number;
+          effective_from?: string;
+        };
+      };
+
+      // -----------------------------------------------------------------------
+      // discount_slabs — quantity or value-based discount slabs per product
+      // -----------------------------------------------------------------------
+      discount_slabs: {
+        Row: {
+          id: string;
+          product_id: string;
+          slab_type: "quantity" | "value";
+          min_value: number;
+          max_value: number | null;
+          discount_percent: number;
+          applicable_tier: "distributor" | "retailer";
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          product_id: string;
+          slab_type: "quantity" | "value";
+          min_value: number;
+          max_value?: number | null;
+          discount_percent: number;
+          applicable_tier: "distributor" | "retailer";
+          created_at?: string;
+        };
+        Update: {
+          min_value?: number;
+          max_value?: number | null;
+          discount_percent?: number;
+          applicable_tier?: "distributor" | "retailer";
+        };
+      };
+
+      // -----------------------------------------------------------------------
+      // category_distributor_mappings — category → distributor exclusivity
+      // -----------------------------------------------------------------------
+      category_distributor_mappings: {
+        Row: {
+          id: string;
+          category: "Bread" | "Biscuits" | "Cakes" | "Rusk" | "Other";
+          distributor_id: string;
+          is_exclusive: boolean;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          category: "Bread" | "Biscuits" | "Cakes" | "Rusk" | "Other";
+          distributor_id: string;
+          is_exclusive?: boolean;
+          created_at?: string;
+        };
+        Update: {
+          is_exclusive?: boolean;
+        };
+      };
+
+      // -----------------------------------------------------------------------
+      // deliveries — field delivery visits (used in deactivation guard)
+      // -----------------------------------------------------------------------
+      deliveries: {
+        Row: {
+          id: string;
+          sales_person_id: string | null;
+          delivery_date: string;
+          status: "pending" | "in_progress" | "completed" | "cancelled";
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          sales_person_id?: string | null;
+          delivery_date: string;
+          status?: "pending" | "in_progress" | "completed" | "cancelled";
+          created_at?: string;
+        };
+        Update: {
+          status?: "pending" | "in_progress" | "completed" | "cancelled";
+        };
+      };
+
+      // -----------------------------------------------------------------------
+      // stores — retail outlet master (GPS + photo mandatory from v1.1)
+      // -----------------------------------------------------------------------
+      stores: {
+        Row: {
+          id: string;
+          name: string;
+          owner_name: string | null;
+          phone: string | null;
+          address: string | null;
+          gps_lat: number | null;
+          gps_lng: number | null;
+          area_id: string;
+          primary_distributor_id: string | null;
+          is_active: boolean;
+          onboarded_by: string;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          name: string;
+          owner_name?: string | null;
+          phone?: string | null;
+          address?: string | null;
+          gps_lat?: number | null;
+          gps_lng?: number | null;
+          area_id: string;
+          primary_distributor_id?: string | null;
+          is_active?: boolean;
+          onboarded_by: string;
+          created_at?: string;
+        };
+        Update: {
+          name?: string;
+          owner_name?: string | null;
+          phone?: string | null;
+          address?: string | null;
+          gps_lat?: number | null;
+          gps_lng?: number | null;
+          area_id?: string;
+          primary_distributor_id?: string | null;
+          is_active?: boolean;
+        };
+      };
+
+      // -----------------------------------------------------------------------
+      // store_photos — v1.1: mandatory shop photos linked to stores
+      // -----------------------------------------------------------------------
+      store_photos: {
+        Row: {
+          id: string;
+          store_id: string;
+          photo_url: string;
+          uploaded_by: string;
+          uploaded_at: string;
+        };
+        Insert: {
+          id?: string;
+          store_id: string;
+          photo_url: string;
+          uploaded_by: string;
+          uploaded_at?: string;
+        };
+        Update: {
+          photo_url?: string;
+        };
+      };
+
+      // -----------------------------------------------------------------------
+      // store_approval_requests — v1.1: workflow for distributor-created stores
+      // -----------------------------------------------------------------------
+      store_approval_requests: {
+        Row: {
+          id: string;
+          store_id: string;
+          submitted_by: string;                // distributor who created
+          assigned_salesperson_id: string | null; // SP for that area
+          status: "pending" | "approved" | "rejected";
+          rejection_reason: string | null;
+          reviewed_at: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          store_id: string;
+          submitted_by: string;
+          assigned_salesperson_id?: string | null;
+          status?: "pending" | "approved" | "rejected";
+          rejection_reason?: string | null;
+          reviewed_at?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          status?: "pending" | "approved" | "rejected";
+          rejection_reason?: string | null;
+          reviewed_at?: string | null;
         };
       };
 
@@ -87,7 +407,7 @@ export interface Database {
     };
 
     Enums: {
-      user_role: "super_admin" | "sales_supervisor" | "sales_person" | "distributor";
+      user_role: "super_admin" | "super_stockist" | "sales_person" | "distributor";
       order_status: "pending" | "confirmed" | "dispatched" | "delivered" | "cancelled";
     };
   };

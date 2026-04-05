@@ -7,9 +7,7 @@
 
 import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
-import type { Database } from "@/types/database.types";
-
-type UserRole = Database["public"]["Enums"]["user_role"];
+import type { UserRole } from "./constants";
 
 // ---------------------------------------------------------------------------
 // Return types
@@ -17,16 +15,6 @@ type UserRole = Database["public"]["Enums"]["user_role"];
 export type SignInSuccess = { success: true; role: UserRole };
 export type SignInError = { error: string };
 export type SignInResult = SignInSuccess | SignInError;
-
-// ---------------------------------------------------------------------------
-// Role → destination mapping (kept in one place for easy maintenance)
-// ---------------------------------------------------------------------------
-export const ROLE_REDIRECT: Record<UserRole, string> = {
-  super_admin: "/dashboard",
-  sales_supervisor: "/dashboard", // also referred to as "super_stockist" in some docs
-  sales_person: "/dashboard",
-  distributor: "/app",
-};
 
 // ---------------------------------------------------------------------------
 // signIn — authenticate with phone + password

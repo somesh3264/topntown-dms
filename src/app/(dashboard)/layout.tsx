@@ -1,21 +1,36 @@
 // src/app/(dashboard)/layout.tsx
 // ---------------------------------------------------------------------------
-// Shared layout for internal users: Super Admin, Sales Supervisor (SS),
-// and Sales Person.  Server Component — reads the current user from Supabase
-// and renders a sidebar + topbar shell.
+// Dashboard layout — Server Component.
+//
+// Responsibilities:
+//   1. Auth guard — redirect to /login if no active session.
+//   2. Role resolution — reads x-effective-role header written by middleware
+//      (respects impersonation context) with a cookie fallback.
+//   3. Profile fetch — single-row query for the user's full_name.
+//   4. ImpersonationBanner — rendered outside the flex shell so its
+//      position:fixed anchors to the viewport (not a clipping ancestor).
+//   5. DashboardShell — Client Component that owns mobile sidebar state
+//      and renders the header bar + SidebarNav + main content area.
+//
+// Why a Client Component shell?
+//   The mobile hamburger menu requires useState/onClick, which cannot exist
+//   in a Server Component.  We extract just the interactive wrapper into
+//   DashboardShell while keeping *this* file server-only so it can read
+//   cookies, headers, and call Supabase without a client round-trip.
 // ---------------------------------------------------------------------------
 
 import type { Metadata } from "next";
+import { headers, cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import DashboardSidebar from "./_components/DashboardSidebar";
-import DashboardTopbar from "./_components/DashboardTopbar";
+import type { UserRole } from "@/middleware";
 import ImpersonationBanner from "@/components/ImpersonationBanner";
+import { DashboardShell } from "./_components/DashboardShell";
 
 export const metadata: Metadata = {
   title: {
     default: "Dashboard",
-    template: "%s | Dashboard — TopNTown DMS",
+    template: "%s | TopNTown DMS",
   },
 };
 
@@ -25,43 +40,66 @@ export default async function DashboardLayout({
   children: React.ReactNode;
 }) {
   const supabase = createClient();
+
+  // ── 1. Auth guard ──────────────────────────────────────────────────────────
+  // Middleware handles the edge-runtime fast path; this is a belt-and-braces
+  // guard inside the RSC render.  getUser() validates the JWT with Supabase —
+  // it is NOT safe to skip this and rely on the cookie alone.
   const {
     data: { user },
   } = await supabase.auth.getUser();
 
-  // Middleware handles most redirects but this is a belt-and-braces guard.
   if (!user) {
     redirect("/login");
   }
 
-  // TODO: fetch user profile + role from `public.profiles` table.
-  const displayName = user.email ?? "User";
+  // ── 2. Effective role ──────────────────────────────────────────────────────
+  // Prefer the x-effective-role header set by middleware.  During impersonation
+  // this reflects the impersonated role so the sidebar renders the correct nav
+  // items.  Fall back to the user_role cookie for resilience.
+  const reqHeaders = headers();
+  const cookieStore = cookies();
 
+  const effectiveRole =
+    (reqHeaders.get("x-effective-role") as UserRole | null) ??
+    (cookieStore.get("user_role")?.value as UserRole | undefined) ??
+    null;
+
+  if (!effectiveRole) {
+    // Authenticated but role not set — profile was never created.
+    redirect("/login?error=missing_profile");
+  }
+
+  // ── 3. Profile fetch ───────────────────────────────────────────────────────
+  // Single lightweight row — full_name for the header user display.
+  // Errors are swallowed gracefully; we fall back to the user's email.
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("full_name")
+    .eq("id", user.id)
+    .single();
+
+  const displayName = profile?.full_name ?? user.email ?? "User";
+
+  // ── 4. Render ──────────────────────────────────────────────────────────────
   return (
     <>
       {/*
-        ImpersonationBanner — Server Component.
-        Reads the "impersonating_role" + "impersonating_user_id" cookies and
-        renders a fixed red banner at the very top of the viewport (z-[9999])
-        when a Super Admin is in impersonation mode.  Returns null otherwise,
-        so it is zero-cost for all non-impersonation requests.
-
-        It must sit OUTSIDE the h-screen container below so its `position:fixed`
-        anchors to the viewport rather than to a clipping ancestor.
+        ImpersonationBanner — position:fixed, z-[9999].
+        Must be rendered OUTSIDE the h-screen overflow-hidden container below
+        so the fixed positioning is relative to the viewport rather than to
+        the nearest scroll ancestor.
       */}
       <ImpersonationBanner />
 
-      <div className="flex h-screen overflow-hidden bg-background">
-        {/* Persistent sidebar — hidden on mobile, visible md+ */}
-        <DashboardSidebar />
-
-        {/* Main content area */}
-        <div className="flex flex-1 flex-col overflow-hidden">
-          <DashboardTopbar displayName={displayName} />
-
-          <main className="flex-1 overflow-y-auto p-6">{children}</main>
-        </div>
-      </div>
+      {/*
+        DashboardShell — Client Component.
+        Receives server-fetched data as plain props and owns the mobile
+        sidebar open/close state.
+      */}
+      <DashboardShell role={effectiveRole} displayName={displayName}>
+        {children}
+      </DashboardShell>
     </>
   );
 }
