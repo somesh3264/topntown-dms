@@ -89,10 +89,10 @@ async function OutstandingPayments({ role }: { role: UserRole }) {
 
   const { data, error } = await supabase
     .from("orders")
-    .select("total, status")
+    .select("total_amount, status")
     .in("status", ["pending", "confirmed"]);
 
-  const total = data?.reduce((sum, o) => sum + (o.total ?? 0), 0) ?? 0;
+  const total = data?.reduce((sum, o) => sum + (o.total_amount ?? 0), 0) ?? 0;
   const orderCount = data?.length ?? 0;
 
   return (
