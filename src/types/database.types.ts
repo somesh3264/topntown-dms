@@ -18,8 +18,10 @@ export type Json =
   | Json[];
 
 export interface Database {
-  public: {
+  __InternalSupabase: {
     PostgrestVersion: "12";
+  };
+  public: {
     Tables: {
       // -----------------------------------------------------------------------
       // zones — top-level geographic regions
