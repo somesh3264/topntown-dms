@@ -92,7 +92,7 @@ export async function signIn(
     };
   }
 
-  const role = profile.role as UserRole;
+  const role = (profile as { role: string }).role as UserRole;
 
   // ---- 3. Persist role in a cookie so the client can redirect ----------
   //
