@@ -64,7 +64,7 @@ export async function POST(request: NextRequest) {
   // Non-fatal — if the insert fails we still clear the cookies so the SA
   // isn't stuck in impersonation mode.
   try {
-    await supabase.from("audit_logs" as never).insert({
+    await supabase.from("audit_logs").insert({
       actor_id: user.id,
       action: "impersonation_end",
       target_user_id: impersonatedUserId,

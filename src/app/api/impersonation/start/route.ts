@@ -110,7 +110,7 @@ export async function POST(request: NextRequest) {
 
   // ── Audit log ──────────────────────────────────────────────────────────────
   try {
-    await supabase.from("audit_logs" as never).insert({
+    await supabase.from("audit_logs").insert({
       actor_id: user.id,
       action: "impersonation_start",
       target_user_id: targetUserId,
