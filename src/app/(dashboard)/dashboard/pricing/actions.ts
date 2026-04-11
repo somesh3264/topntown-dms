@@ -7,7 +7,9 @@
 //   updatePricingMargin(tier, pct)  — validate [0,500], update DB, revalidate
 //   recalculateAllPrices()          — call fn_recalculate_all_prices() via RPC,
 //                                     revalidate products + pricing, return count
-//   previewPricing(fsp, margins?)   — pure calc, no DB write
+//
+// Pure types/utils (previewPricing, TIER_META, TIER_ORDER, types) live in
+// ./pricing-utils.ts — import from there for use in Client Components.
 //
 // Table: pricing_margins  (id, tier, margin_pct, base_tier, description, updated_at)
 // Stored fn: fn_recalculate_all_prices() → integer (rows updated)
@@ -19,68 +21,17 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import { TIER_ORDER } from "./pricing-utils";
+import type { PricingTierKey, PricingMargin } from "./pricing-utils";
+export type { PricingTierKey, PricingMargin } from "./pricing-utils";
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-export type PricingTierKey = "super_stockist" | "distributor" | "retailer" | "mrp";
-
-export interface PricingMargin {
-  id: string;
-  tier: PricingTierKey;
-  margin_pct: number;
-  base_tier: string | null;
-  description: string | null;
-  updated_at: string;
-}
-
-export interface PricingPreview {
-  fsp: number;
-  ss_price: number;
-  distributor_price: number;
-  retailer_price: number;
-  mrp: number;
-}
+// ─── Internal result type ─────────────────────────────────────────────────────
 
 interface ActionResult<T = void> {
   success: boolean;
   data?: T;
   error?: string;
 }
-
-// ── Ordered display config (used by the client component) ─────────────────────
-
-export const TIER_META: Record<
-  PricingTierKey,
-  { label: string; basePriceLabel: string; color: string }
-> = {
-  super_stockist: {
-    label: "Super Stockist",
-    basePriceLabel: "Factory Selling Price",
-    color: "blue",
-  },
-  distributor: {
-    label: "Distributor",
-    basePriceLabel: "Factory Selling Price",
-    color: "violet",
-  },
-  retailer: {
-    label: "Retailer",
-    basePriceLabel: "SS Purchase Price",
-    color: "orange",
-  },
-  mrp: {
-    label: "MRP (Consumer)",
-    basePriceLabel: "Retailer Price",
-    color: "red",
-  },
-};
-
-export const TIER_ORDER: PricingTierKey[] = [
-  "super_stockist",
-  "distributor",
-  "retailer",
-  "mrp",
-];
 
 // ─── Server Actions ───────────────────────────────────────────────────────────
 
@@ -157,31 +108,4 @@ export async function recalculateAllPrices(): Promise<ActionResult<{ count: numb
   return { success: true, data: { count: (data as number) ?? 0 } };
 }
 
-/**
- * Pure synchronous calculation — no DB reads or writes.
- *
- * Price chain (mirrors fn_auto_price_recalc trigger):
- *   ss_price          = fsp           × (1 + ss%   / 100)
- *   distributor_price = fsp           × (1 + dist% / 100)
- *   retailer_price    = ss_price      × (1 + retail% / 100)
- *   mrp               = retailer_price × (1 + mrp%  / 100)
- *
- * @param fsp     Factory Selling Price
- * @param margins Margin percentages keyed by PricingTierKey.  When omitted
- *                all margins default to 0 so callers can render a skeleton
- *                preview before the DB fetch completes.
- */
-export function previewPricing(
-  fsp: number,
-  margins?: Partial<Record<PricingTierKey, number>>
-): PricingPreview {
-  const m = margins ?? {};
-  const round2 = (n: number) => Math.round(n * 100) / 100;
-
-  const ss_price          = round2(fsp            * (1 + (m.super_stockist ?? 0) / 100));
-  const distributor_price = round2(fsp            * (1 + (m.distributor    ?? 0) / 100));
-  const retailer_price    = round2(ss_price        * (1 + (m.retailer       ?? 0) / 100));
-  const mrp               = round2(retailer_price  * (1 + (m.mrp            ?? 0) / 100));
-
-  return { fsp, ss_price, distributor_price, retailer_price, mrp };
-}
+// previewPricing lives in ./pricing-utils.ts (not a server action — pure function)

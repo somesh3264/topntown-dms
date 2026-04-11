@@ -26,14 +26,9 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { toast } from "@/hooks/use-toast";
-import {
-  updatePricingMargin,
-  recalculateAllPrices,
-  previewPricing,
-  TIER_META,
-  TIER_ORDER,
-} from "../actions";
-import type { PricingMargin, PricingTierKey, PricingPreview } from "../actions";
+import { updatePricingMargin, recalculateAllPrices } from "../actions";
+import { previewPricing, TIER_META, TIER_ORDER } from "../pricing-utils";
+import type { PricingMargin, PricingTierKey, PricingPreview } from "../pricing-utils";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
