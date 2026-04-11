@@ -22,13 +22,17 @@ const nextConfig = {
 };
 
 // ---------------------------------------------------------------------------
-// next-pwa — only active in production builds.
+// @ducanh2912/next-pwa — only active in production builds.
+// Replaces the unmaintained next-pwa@5.6.0 which was incompatible with
+// Next.js 14 App Router and caused a TypeScript build error via its
+// transitive @types/minimatch@6 stub dependency.
+//
 // The PWA is scoped to the /(app) segment (distributor mobile experience).
 // ---------------------------------------------------------------------------
 let exportedConfig = nextConfig;
 
 if (!isDev) {
-  const withPWA = require("next-pwa")({
+  const withPWA = require("@ducanh2912/next-pwa").default({
     dest: "public",
     register: true,
     skipWaiting: true,
@@ -36,36 +40,38 @@ if (!isDev) {
     scope: "/app",
     // Disable Workbox logging in production
     disable: false,
-    runtimeCaching: [
-      {
-        // Cache all navigation requests inside the /app scope
-        urlPattern: /^https:\/\/.*\/app(\/.*)?$/,
-        handler: "NetworkFirst",
-        options: {
-          cacheName: "topntown-dms-app-pages",
-          expiration: { maxEntries: 50, maxAgeSeconds: 24 * 60 * 60 },
+    workboxOptions: {
+      runtimeCaching: [
+        {
+          // Cache all navigation requests inside the /app scope
+          urlPattern: /^https:\/\/.*\/app(\/.*)?$/,
+          handler: "NetworkFirst",
+          options: {
+            cacheName: "topntown-dms-app-pages",
+            expiration: { maxEntries: 50, maxAgeSeconds: 24 * 60 * 60 },
+          },
         },
-      },
-      {
-        // Cache Supabase REST/Storage responses
-        urlPattern: /^https:\/\/.*\.supabase\.co\/.*/i,
-        handler: "NetworkFirst",
-        options: {
-          cacheName: "supabase-api",
-          expiration: { maxEntries: 100, maxAgeSeconds: 60 * 60 },
-          networkTimeoutSeconds: 10,
+        {
+          // Cache Supabase REST/Storage responses
+          urlPattern: /^https:\/\/.*\.supabase\.co\/.*/i,
+          handler: "NetworkFirst",
+          options: {
+            cacheName: "supabase-api",
+            expiration: { maxEntries: 100, maxAgeSeconds: 60 * 60 },
+            networkTimeoutSeconds: 10,
+          },
         },
-      },
-      {
-        // Cache static assets aggressively
-        urlPattern: /\.(?:js|css|woff2?|png|jpg|jpeg|svg|ico)$/i,
-        handler: "CacheFirst",
-        options: {
-          cacheName: "static-assets",
-          expiration: { maxEntries: 200, maxAgeSeconds: 30 * 24 * 60 * 60 },
+        {
+          // Cache static assets aggressively
+          urlPattern: /\.(?:js|css|woff2?|png|jpg|jpeg|svg|ico)$/i,
+          handler: "CacheFirst",
+          options: {
+            cacheName: "static-assets",
+            expiration: { maxEntries: 200, maxAgeSeconds: 30 * 24 * 60 * 60 },
+          },
         },
-      },
-    ],
+      ],
+    },
   });
 
   exportedConfig = withPWA(nextConfig);

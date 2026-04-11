@@ -7,14 +7,14 @@
 
 export type UserRole =
   | "super_admin"
-  | "sales_supervisor"
+  | "super_stockist"
   | "sales_person"
   | "distributor";
 
 /** Maps each role to its post-login landing path. */
 export const ROLE_REDIRECT: Record<UserRole, string> = {
   super_admin: "/dashboard",
-  sales_supervisor: "/dashboard",
+  super_stockist: "/dashboard",
   sales_person: "/dashboard",
   distributor: "/app",
 };

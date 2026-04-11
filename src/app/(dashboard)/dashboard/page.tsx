@@ -90,7 +90,7 @@ async function OutstandingPayments({ role }: { role: UserRole }) {
   const { data, error } = await supabase
     .from("orders")
     .select("total_amount, status")
-    .in("status", ["pending", "confirmed"]);
+    .in("status", ["draft", "confirmed"]);
 
   const total = data?.reduce((sum, o) => sum + (o.total_amount ?? 0), 0) ?? 0;
   const orderCount = data?.length ?? 0;
@@ -219,22 +219,18 @@ export default async function DashboardPage() {
       */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Suspense fallback={<KpiCardSkeleton />}>
-          {/* @ts-expect-error async Server Component JSX */}
           <DeliveriesToday role={role} />
         </Suspense>
 
         <Suspense fallback={<KpiCardSkeleton />}>
-          {/* @ts-expect-error async Server Component JSX */}
           <OutstandingPayments role={role} />
         </Suspense>
 
         <Suspense fallback={<KpiCardSkeleton />}>
-          {/* @ts-expect-error async Server Component JSX */}
           <ActiveStores role={role} />
         </Suspense>
 
         <Suspense fallback={<KpiCardSkeleton />}>
-          {/* @ts-expect-error async Server Component JSX */}
           <FillRate role={role} />
         </Suspense>
       </div>

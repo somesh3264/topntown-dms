@@ -6,7 +6,9 @@
 // ---------------------------------------------------------------------------
 
 import { createServerClient } from "@supabase/ssr";
+import type { CookieOptions } from "@supabase/ssr";
 import { cookies } from "next/headers";
+import { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/database.types";
 
 /**
@@ -25,9 +27,15 @@ import type { Database } from "@/types/database.types";
  * }
  * ```
  */
-export function createClient() {
+export function createClient(): SupabaseClient<Database> {
   const cookieStore = cookies();
 
+  // Cast to SupabaseClient<Database> (1-param form) to work around a type-
+  // parameter position mismatch between @supabase/ssr@0.5.x and
+  // @supabase/supabase-js ≥2.60.  The 3-param SupabaseClient<D,S,Schema>
+  // used by createServerClient maps Schema to position-3 (SchemaName) in the
+  // newer 5-param SupabaseClient class, collapsing Schema to `never`.
+  // Using the 1-param form lets TypeScript derive all defaults correctly.
   return createServerClient<Database>(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -36,7 +44,7 @@ export function createClient() {
         getAll() {
           return cookieStore.getAll();
         },
-        setAll(cookiesToSet) {
+        setAll(cookiesToSet: { name: string; value: string; options: CookieOptions }[]) {
           try {
             cookiesToSet.forEach(({ name, value, options }) =>
               cookieStore.set(name, value, options)
@@ -49,5 +57,5 @@ export function createClient() {
         },
       },
     }
-  );
+  ) as unknown as SupabaseClient<Database>;
 }

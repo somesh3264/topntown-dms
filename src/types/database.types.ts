@@ -18,9 +18,10 @@ export type Json =
   | Json[];
 
 export interface Database {
-  __InternalSupabase: {
-    PostgrestVersion: "12";
-  };
+  // NOTE: __InternalSupabase was removed — it is only supported by
+  // @supabase/supabase-js >= 2.45.0. The project uses 2.44.4, and this
+  // field caused the TypeScript SDK to misidentify the schema, resolving
+  // all Insert/Update types as `never`.
   public: {
     Tables: {
       // -----------------------------------------------------------------------

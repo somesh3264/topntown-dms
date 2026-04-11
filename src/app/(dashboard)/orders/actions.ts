@@ -128,8 +128,10 @@ export interface OrderRow {
   created_at: string;
 }
 
+type OrderStatus = "draft" | "confirmed" | "dispatched" | "delivered" | "cancelled" | "billed";
+
 export async function getOrders(filters?: {
-  status?: string;
+  status?: OrderStatus;
   date?: string;
 }): Promise<OrderRow[]> {
   const supabase = createClient();
