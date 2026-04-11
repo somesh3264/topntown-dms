@@ -24,9 +24,15 @@ export type ProductCategory =
   | "Biscuits"
   | "Cakes"
   | "Rusk"
+  | "Cookies"
+  | "Pastries"
+  | "Sandwiches"
+  | "Pav & Buns"
+  | "Namkeen & Snacks"
+  | "Toast & Crackers"
   | "Other";
 
-export type PricingTier = "distributor" | "retailer";
+export type PricingTier = "super_stockist" | "distributor" | "retailer";
 
 export type SlabType = "quantity" | "value";
 
@@ -34,10 +40,27 @@ export interface Product {
   id: string;
   name: string;
   category: ProductCategory;
-  mrp: number;
-  base_price?: number | null;
-  weight_size: string;
+  // ── Identifiers ──────────────────────────────────────────────────────────
+  sku_code?: string | null;
+  sub_category?: string | null;
+  // ── Physical attributes ───────────────────────────────────────────────────
+  unit?: string | null;           // e.g. "Piece", "Pack", "Dozen"
+  weight_size: string;            // legacy free-text field (kept for compat)
+  weight_g?: number | null;       // numeric weight in grams
+  pack_size?: number | null;      // units per pack/case
+  shelf_life_days?: number | null;
+  storage_condition?: string | null;
+  // ── Tax & compliance ──────────────────────────────────────────────────────
+  hsn_code?: string | null;
   tax_rate: number;
+  // ── Pricing chain (set FSP; trigger computes the rest) ────────────────────
+  factory_selling_price?: number | null;
+  ss_price?: number | null;           // computed: FSP × (1 + SS%)
+  distributor_price?: number | null;  // computed: FSP × (1 + Dist%)
+  retailer_price?: number | null;     // computed: SS × (1 + Retailer%)
+  mrp: number;                        // computed: Retailer × (1 + MRP%)
+  base_price?: number | null;         // legacy override price
+  // ── Status ────────────────────────────────────────────────────────────────
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -123,16 +146,33 @@ export async function createProduct(
 ): Promise<ActionResult<{ id: string }>> {
   const supabase = createClient();
 
-  const name = formData.get("name") as string;
-  const category = formData.get("category") as ProductCategory;
-  const mrp = parseFloat(formData.get("mrp") as string);
+  // ── Core fields ──────────────────────────────────────────────────────────
+  const name       = formData.get("name") as string;
+  const category   = formData.get("category") as ProductCategory;
   const weight_size = formData.get("weight_size") as string;
-  const tax_rate = parseFloat(formData.get("tax_rate") as string);
-  const is_active = formData.get("is_active") !== "off";
+  const tax_rate   = parseFloat(formData.get("tax_rate") as string);
+  const is_active  = formData.get("is_active") !== "off";
 
+  // ── New identifiers ──────────────────────────────────────────────────────
+  const sku_code       = (formData.get("sku_code") as string)?.trim() || null;
+  const sub_category   = (formData.get("sub_category") as string)?.trim() || null;
+  const unit           = (formData.get("unit") as string)?.trim() || "Piece";
+  const hsn_code       = (formData.get("hsn_code") as string)?.trim() || null;
+
+  // ── Pricing ───────────────────────────────────────────────────────────────
+  const fspRaw = formData.get("factory_selling_price") as string;
+  const factory_selling_price = fspRaw ? parseFloat(fspRaw) : null;
+  // mrp: only used when FSP is absent (legacy path); trigger overrides when FSP is set
+  const mrpRaw = formData.get("mrp") as string;
+  const mrp    = mrpRaw ? parseFloat(mrpRaw) : 0;
+
+  // ── Validation ────────────────────────────────────────────────────────────
   if (!name?.trim()) return { success: false, error: "Product name is required." };
-  if (!category) return { success: false, error: "Category is required." };
-  if (isNaN(mrp) || mrp < 0) return { success: false, error: "MRP must be a non-negative number." };
+  if (!category)     return { success: false, error: "Category is required." };
+  if (factory_selling_price !== null && (isNaN(factory_selling_price) || factory_selling_price < 0))
+    return { success: false, error: "Factory Selling Price must be a non-negative number." };
+  if (!factory_selling_price && (isNaN(mrp) || mrp < 0))
+    return { success: false, error: "Enter either a Factory Selling Price or an MRP." };
   if (isNaN(tax_rate) || tax_rate < 0 || tax_rate > 100)
     return { success: false, error: "Tax rate must be between 0 and 100." };
 
@@ -141,11 +181,16 @@ export async function createProduct(
     .insert({
       name: name.trim(),
       category,
-      mrp,
+      mrp: factory_selling_price ? undefined : mrp, // trigger sets mrp when FSP present
       weight_size: weight_size?.trim() ?? "",
       tax_rate,
       is_active,
-    })
+      sku_code,
+      sub_category,
+      unit,
+      hsn_code,
+      factory_selling_price: factory_selling_price ?? null,
+    } as any)
     .select("id")
     .single();
 
@@ -164,30 +209,56 @@ export async function updateProduct(
 ): Promise<ActionResult> {
   const supabase = createClient();
 
-  const name = formData.get("name") as string;
-  const category = formData.get("category") as ProductCategory;
-  const mrp = parseFloat(formData.get("mrp") as string);
+  // ── Core fields ──────────────────────────────────────────────────────────
+  const name        = formData.get("name") as string;
+  const category    = formData.get("category") as ProductCategory;
   const weight_size = formData.get("weight_size") as string;
-  const tax_rate = parseFloat(formData.get("tax_rate") as string);
-  const is_active = formData.get("is_active") !== "off";
+  const tax_rate    = parseFloat(formData.get("tax_rate") as string);
+  const is_active   = formData.get("is_active") !== "off";
 
+  // ── New identifiers ──────────────────────────────────────────────────────
+  const sku_code     = (formData.get("sku_code") as string)?.trim() || null;
+  const sub_category = (formData.get("sub_category") as string)?.trim() || null;
+  const unit         = (formData.get("unit") as string)?.trim() || "Piece";
+  const hsn_code     = (formData.get("hsn_code") as string)?.trim() || null;
+
+  // ── Pricing ───────────────────────────────────────────────────────────────
+  const fspRaw = formData.get("factory_selling_price") as string;
+  const factory_selling_price = fspRaw ? parseFloat(fspRaw) : null;
+  const mrpRaw = formData.get("mrp") as string;
+  const mrp    = mrpRaw ? parseFloat(mrpRaw) : null;
+
+  // ── Validation ────────────────────────────────────────────────────────────
   if (!name?.trim()) return { success: false, error: "Product name is required." };
-  if (!category) return { success: false, error: "Category is required." };
-  if (isNaN(mrp) || mrp < 0) return { success: false, error: "MRP must be a non-negative number." };
+  if (!category)     return { success: false, error: "Category is required." };
+  if (factory_selling_price !== null && (isNaN(factory_selling_price) || factory_selling_price < 0))
+    return { success: false, error: "Factory Selling Price must be a non-negative number." };
+  if (mrp !== null && (isNaN(mrp) || mrp < 0))
+    return { success: false, error: "MRP must be a non-negative number." };
   if (isNaN(tax_rate) || tax_rate < 0 || tax_rate > 100)
     return { success: false, error: "Tax rate must be between 0 and 100." };
 
+  // Build update payload — omit mrp when FSP is present (trigger handles it)
+  const payload: Record<string, unknown> = {
+    name: name.trim(),
+    category,
+    weight_size: weight_size?.trim() ?? "",
+    tax_rate,
+    is_active,
+    sku_code,
+    sub_category,
+    unit,
+    hsn_code,
+    factory_selling_price: factory_selling_price ?? null,
+    updated_at: new Date().toISOString(),
+  };
+  if (!factory_selling_price && mrp !== null) {
+    payload.mrp = mrp; // manual MRP only when no FSP
+  }
+
   const { error } = await supabase
     .from("products")
-    .update({
-      name: name.trim(),
-      category,
-      mrp,
-      weight_size: weight_size?.trim() ?? "",
-      tax_rate,
-      is_active,
-      updated_at: new Date().toISOString(),
-    })
+    .update(payload as any)
     .eq("id", id);
 
   if (error) {
@@ -274,7 +345,7 @@ export async function upsertPriceOverride(
         user_id: userId,
         price,
         effective_from: effectiveFrom,
-      },
+      } as any,
       { onConflict: "product_id,tier,user_id" }
     );
 
@@ -325,6 +396,48 @@ export async function updateBasePrice(
   return { success: true };
 }
 
+/**
+ * Update only the Factory Selling Price for a product.
+ * The DB trigger (fn_auto_price_recalc) will automatically recompute
+ * ss_price, distributor_price, retailer_price, and mrp.
+ */
+export async function updateFactorySellingPrice(
+  productId: string,
+  fsp: number
+): Promise<ActionResult<{ ss_price: number; distributor_price: number; retailer_price: number; mrp: number }>> {
+  const supabase = createClient();
+
+  if (isNaN(fsp) || fsp < 0)
+    return { success: false, error: "Factory Selling Price must be a non-negative number." };
+
+  const { data, error } = await supabase
+    .from("products")
+    .update({
+      factory_selling_price: fsp,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", productId)
+    .select("ss_price, distributor_price, retailer_price, mrp")
+    .single();
+
+  if (error) {
+    console.error("[updateFactorySellingPrice]", error.message);
+    return { success: false, error: error.message };
+  }
+
+  revalidatePath(`/dashboard/products/${productId}`);
+  revalidatePath("/dashboard/products");
+  return {
+    success: true,
+    data: {
+      ss_price:          (data as any).ss_price          ?? 0,
+      distributor_price: (data as any).distributor_price ?? 0,
+      retailer_price:    (data as any).retailer_price    ?? 0,
+      mrp:               (data as any).mrp               ?? 0,
+    },
+  };
+}
+
 // ─── Discount Slabs ───────────────────────────────────────────────────────────
 
 export async function getDiscountSlabs(
@@ -366,7 +479,7 @@ export async function upsertDiscountSlab(
   if (slabData.max_value !== null && slabData.max_value < min_value)
     return { success: false, error: "Max value must be greater than min value." };
 
-  const payload = {
+  const payload: any = {
     product_id: productId,
     slab_type: slabData.slab_type,
     min_value: slabData.min_value,
@@ -447,7 +560,7 @@ export async function assignCategoryDistributor(
         category,
         distributor_id: distributorId,
         is_exclusive: isExclusive,
-      },
+      } as any,
       { onConflict: "category,distributor_id" }
     );
 

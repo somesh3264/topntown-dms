@@ -14,10 +14,7 @@
 
 import { type NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { ROLE_REDIRECT } from "@/app/(auth)/login/constants";
-import type { Database } from "@/types/database.types";
-
-type UserRole = Database["public"]["Enums"]["user_role"];
+import { ROLE_REDIRECT, type UserRole } from "@/app/(auth)/login/constants";
 
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url);

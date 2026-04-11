@@ -19,6 +19,12 @@ const config: Config = {
       },
     },
     extend: {
+      spacing: {
+        // Height of the ImpersonationBanner (fixed top bar, py-2 + text-sm ≈ 40px).
+        // Use mt-[theme(spacing.banner)] on sibling containers to avoid content
+        // being hidden beneath the banner when impersonation mode is active.
+        banner: "2.5rem",
+      },
       colors: {
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
