@@ -104,7 +104,7 @@ export function ProductListClient({
       fd.append("name", product.name);
       fd.append("category", product.category);
       fd.append("mrp", product.mrp.toString());
-      fd.append("weight_size", product.weight_size);
+      fd.append("weight", product.weight);
       fd.append("tax_rate", product.tax_rate.toString());
       fd.append("is_active", "on");
 
@@ -206,7 +206,7 @@ export function ProductListClient({
                     <TableCell>{product.category}</TableCell>
                     <TableCell>₹{product.mrp.toFixed(2)}</TableCell>
                     <TableCell className="text-muted-foreground">
-                      {product.weight_size || "—"}
+                      {product.weight || "—"}
                     </TableCell>
                     <TableCell>{product.tax_rate}%</TableCell>
                     <TableCell>

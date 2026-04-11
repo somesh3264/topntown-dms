@@ -45,7 +45,7 @@ export interface Product {
   sub_category?: string | null;
   // ── Physical attributes ───────────────────────────────────────────────────
   unit?: string | null;           // e.g. "Piece", "Pack", "Dozen"
-  weight_size: string;            // legacy free-text field (kept for compat)
+  weight: string;                 // free-text weight/size field
   weight_g?: number | null;       // numeric weight in grams
   pack_size?: number | null;      // units per pack/case
   shelf_life_days?: number | null;
@@ -149,7 +149,7 @@ export async function createProduct(
   // ── Core fields ──────────────────────────────────────────────────────────
   const name       = formData.get("name") as string;
   const category   = formData.get("category") as ProductCategory;
-  const weight_size = formData.get("weight_size") as string;
+  const weight = formData.get("weight") as string;
   const tax_rate   = parseFloat(formData.get("tax_rate") as string);
   const is_active  = formData.get("is_active") !== "off";
 
@@ -182,7 +182,7 @@ export async function createProduct(
       name: name.trim(),
       category,
       mrp: factory_selling_price ? undefined : mrp, // trigger sets mrp when FSP present
-      weight_size: weight_size?.trim() ?? "",
+      weight: weight?.trim() ?? "",
       tax_rate,
       is_active,
       sku_code,
@@ -212,7 +212,7 @@ export async function updateProduct(
   // ── Core fields ──────────────────────────────────────────────────────────
   const name        = formData.get("name") as string;
   const category    = formData.get("category") as ProductCategory;
-  const weight_size = formData.get("weight_size") as string;
+  const weight = formData.get("weight") as string;
   const tax_rate    = parseFloat(formData.get("tax_rate") as string);
   const is_active   = formData.get("is_active") !== "off";
 
@@ -242,7 +242,7 @@ export async function updateProduct(
   const payload: Record<string, unknown> = {
     name: name.trim(),
     category,
-    weight_size: weight_size?.trim() ?? "",
+    weight: weight?.trim() ?? "",
     tax_rate,
     is_active,
     sku_code,

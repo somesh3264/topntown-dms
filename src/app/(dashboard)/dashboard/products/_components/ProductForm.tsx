@@ -82,7 +82,7 @@ export function ProductForm({ mode, product, onSaved }: ProductFormProps) {
   // ── Core fields ────────────────────────────────────────────────────────────
   const [name,       setName]       = useState(product?.name ?? "");
   const [category,   setCategory]   = useState<ProductCategory>(product?.category ?? "Bread");
-  const [weightSize, setWeightSize] = useState(product?.weight_size ?? "");
+  const [weightSize, setWeightSize] = useState(product?.weight ?? "");
   const [taxRate,    setTaxRate]    = useState(product?.tax_rate?.toString() ?? "0");
   const [isActive,   setIsActive]   = useState(product?.is_active ?? true);
 
@@ -157,7 +157,7 @@ export function ProductForm({ mode, product, onSaved }: ProductFormProps) {
     const fd = new FormData();
     fd.append("name", name.trim());
     fd.append("category", category);
-    fd.append("weight_size", weightSize.trim());
+    fd.append("weight", weightSize.trim());
     fd.append("tax_rate", taxRate);
     fd.append("is_active", isActive ? "on" : "off");
     fd.append("sku_code", skuCode.trim());
@@ -258,8 +258,8 @@ export function ProductForm({ mode, product, onSaved }: ProductFormProps) {
 
         {/* Weight / Size */}
         <div className="space-y-1.5">
-          <Label htmlFor="weight_size">Weight / Size</Label>
-          <Input id="weight_size" value={weightSize} onChange={(e) => setWeightSize(e.target.value)}
+          <Label htmlFor="weight">Weight / Size</Label>
+          <Input id="weight" value={weightSize} onChange={(e) => setWeightSize(e.target.value)}
             placeholder="e.g. 400g or 6-pack" disabled={isPending} />
         </div>
       </div>
