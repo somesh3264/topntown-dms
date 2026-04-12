@@ -1,17 +1,13 @@
 // src/components/ui/sidebar-nav.tsx
 // ---------------------------------------------------------------------------
-// Reusable sidebar navigation component.
+// Reusable sidebar navigation component — warm dark theme with section groups.
 //
 // • Client Component — needs usePathname for active-route highlighting.
 // • Role-conditional: only items matching the current UserRole are rendered.
 // • Mobile-responsive: sits behind a translucent overlay and slides in/out.
 //   The parent (DashboardShell) owns the open/close state and passes it down.
-//
-// Role → nav item mapping:
-//   super_admin    → Dashboard, Products, Pricing, Zones & Areas, Users,
-//                    Stores, Orders, Reports, System Config
-//   super_stockist → Dashboard, My Network, Stores, Orders, Reports
-//   sales_person   → Dashboard, Stores, Reports
+// • Section groups: items are grouped under labelled sections (OVERVIEW,
+//   OPERATIONS, FINANCE, SYSTEM) matching the TopNTown DMS design system.
 // ---------------------------------------------------------------------------
 
 "use client";
@@ -31,6 +27,7 @@ import {
   Network,
   X,
   GitBranch,
+  CreditCard,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { UserRole } from "@/middleware";
@@ -43,94 +40,103 @@ interface NavItem {
   icon: React.ElementType;
   /** Roles that can see this item. */
   roles: UserRole[];
+  /** Section this item belongs to. */
+  section: string;
 }
 
 /**
- * Ordered list of all possible sidebar items.
+ * Ordered list of all possible sidebar items with section grouping.
  * Items are filtered by role at render time.
- * Place role-specific items between the shared Dashboard and Reports entries.
  */
 const NAV_ITEMS: NavItem[] = [
-  // ── Shared across all internal roles ──────────────────────────────────────
+  // ── OVERVIEW ──────────────────────────────────────────────────────────────
   {
     href: "/dashboard",
     label: "Dashboard",
     icon: LayoutDashboard,
     roles: ["super_admin", "super_stockist", "sales_person"],
+    section: "OVERVIEW",
   },
 
-  // ── Super Admin only ───────────────────────────────────────────────────────
+  // ── OPERATIONS ────────────────────────────────────────────────────────────
   {
     href: "/dashboard/products",
-    label: "Products",
+    label: "Products & Pricing",
     icon: Package,
     roles: ["super_admin"],
+    section: "OPERATIONS",
   },
   {
     href: "/dashboard/master/category-mapping",
     label: "Category Mapping",
     icon: GitBranch,
     roles: ["super_admin"],
-  },
-  {
-    href: "/dashboard/pricing",
-    label: "Pricing",
-    icon: Tag,
-    roles: ["super_admin"],
+    section: "OPERATIONS",
   },
   {
     href: "/dashboard/master",
     label: "Zones & Areas",
     icon: MapPin,
     roles: ["super_admin"],
+    section: "OPERATIONS",
   },
   {
     href: "/dashboard/users",
-    label: "Users",
+    label: "Users & Network",
     icon: Users,
     roles: ["super_admin"],
+    section: "OPERATIONS",
   },
-
-  // ── Super Stockist only ────────────────────────────────────────────────────
   {
     href: "/dashboard/network",
     label: "My Network",
     icon: Network,
     roles: ["super_stockist"],
+    section: "OPERATIONS",
   },
-
-  // ── SA + SS + SP ──────────────────────────────────────────────────────────
   {
     href: "/dashboard/stores",
-    label: "Stores",
+    label: "Retail Stores",
     icon: Store,
     roles: ["super_admin", "super_stockist", "sales_person"],
+    section: "OPERATIONS",
   },
-
-  // ── SA + SS ───────────────────────────────────────────────────────────────
   {
     href: "/dashboard/orders",
-    label: "Orders",
+    label: "Orders & Billing",
     icon: ShoppingCart,
     roles: ["super_admin", "super_stockist"],
+    section: "OPERATIONS",
   },
 
-  // ── Shared ────────────────────────────────────────────────────────────────
+  // ── FINANCE ───────────────────────────────────────────────────────────────
+  {
+    href: "/dashboard/pricing",
+    label: "Payments",
+    icon: CreditCard,
+    roles: ["super_admin"],
+    section: "FINANCE",
+  },
   {
     href: "/dashboard/reports",
     label: "Reports",
     icon: BarChart3,
     roles: ["super_admin", "super_stockist", "sales_person"],
+    section: "FINANCE",
   },
 
-  // ── Super Admin only (bottom) ──────────────────────────────────────────────
+  // ── SYSTEM ────────────────────────────────────────────────────────────────
   {
     href: "/dashboard/system",
-    label: "System Config",
+    label: "Configuration",
     icon: Settings2,
     roles: ["super_admin"],
+    section: "SYSTEM",
   },
 ];
+
+/** Ordered list of section labels for consistent rendering order. */
+const SECTION_ORDER = ["OVERVIEW", "OPERATIONS", "FINANCE", "SYSTEM"];
 
 // ─── Role label map ───────────────────────────────────────────────────────────
 
@@ -141,20 +147,21 @@ const ROLE_LABELS: Record<UserRole, string> = {
   distributor: "Distributor",
 };
 
+// ─── Role initials + color ───────────────────────────────────────────────────
+
+const ROLE_AVATARS: Record<string, { initials: string; bg: string }> = {
+  super_admin: { initials: "SA", bg: "bg-emerald-700" },
+  super_stockist: { initials: "SS", bg: "bg-amber-700" },
+  sales_person: { initials: "SP", bg: "bg-sky-700" },
+  distributor: { initials: "D", bg: "bg-violet-700" },
+};
+
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 export interface SidebarNavProps {
-  /**
-   * Effective role — may differ from real role during impersonation.
-   * Passed from the Server Component layout, never read client-side.
-   */
   role: UserRole;
-  /**
-   * Controls the mobile slide-in drawer. Ignored on ≥ md viewports where
-   * the sidebar is always visible.
-   */
+  displayName?: string;
   mobileOpen?: boolean;
-  /** Called when the user taps the backdrop or the close (X) button. */
   onMobileClose?: () => void;
 }
 
@@ -162,21 +169,30 @@ export interface SidebarNavProps {
 
 export function SidebarNav({
   role,
+  displayName,
   mobileOpen = false,
   onMobileClose,
 }: SidebarNavProps) {
   const pathname = usePathname();
 
-  // Only render items the current role is allowed to see
+  // Filter items by role
   const visibleItems = NAV_ITEMS.filter((item) =>
     (item.roles as string[]).includes(role)
   );
+
+  // Group visible items by section, preserving order
+  const sections = SECTION_ORDER.map((sectionLabel) => ({
+    label: sectionLabel,
+    items: visibleItems.filter((item) => item.section === sectionLabel),
+  })).filter((section) => section.items.length > 0);
 
   // Exact match for Dashboard root; prefix match for all other routes
   const isActive = (href: string) =>
     href === "/dashboard"
       ? pathname === "/dashboard"
       : pathname.startsWith(href);
+
+  const avatar = ROLE_AVATARS[role] ?? { initials: "U", bg: "bg-stone-600" };
 
   return (
     <>
@@ -192,8 +208,8 @@ export function SidebarNav({
       {/* ── Sidebar panel ────────────────────────────────────────────────── */}
       <aside
         className={cn(
-          // On mobile: fixed, slides in/out; on desktop: static, always visible
-          "fixed inset-y-0 left-0 z-40 flex w-60 flex-col border-r bg-card",
+          "fixed inset-y-0 left-0 z-40 flex w-60 flex-col",
+          "bg-sidebar text-sidebar-foreground",
           "transition-transform duration-200 ease-in-out",
           "md:static md:translate-x-0",
           mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
@@ -201,18 +217,16 @@ export function SidebarNav({
         aria-label="Sidebar navigation"
       >
         {/* ── Brand header ─────────────────────────────────────────────── */}
-        <div className="flex h-16 shrink-0 items-center justify-between border-b px-5">
-          <span className="text-base font-bold tracking-tight">
-            <span className="text-brand-700">TopN</span>
-            <span className="text-foreground">Town</span>
-            <span className="ml-1.5 rounded bg-brand-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-widest text-brand-700">
-              DMS
-            </span>
+        <div className="flex h-16 shrink-0 items-center justify-between border-b border-sidebar-border px-5">
+          <span className="text-xs font-semibold uppercase tracking-[0.2em] text-sidebar-foreground">
+            Distribution{" "}
+            <span className="text-sidebar-foreground/60">·</span>{" "}
+            DMS
           </span>
 
           {/* Close button — visible on mobile only */}
           <button
-            className="ml-2 rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-accent-foreground md:hidden"
+            className="ml-2 rounded-md p-1 text-sidebar-foreground hover:bg-sidebar-active hover:text-sidebar-active-foreground md:hidden"
             onClick={onMobileClose}
             aria-label="Close navigation"
           >
@@ -220,44 +234,68 @@ export function SidebarNav({
           </button>
         </div>
 
-        {/* ── Navigation list ───────────────────────────────────────────── */}
+        {/* ── Navigation list with sections ─────────────────────────────── */}
         <nav
-          className="flex-1 overflow-y-auto px-3 py-3"
+          className="flex-1 overflow-y-auto px-3 py-4"
           aria-label="Main navigation"
         >
-          <ul className="space-y-0.5">
-            {visibleItems.map(({ href, label, icon: Icon }) => {
-              const active = isActive(href);
-              return (
-                <li key={href}>
-                  <Link
-                    href={href}
-                    onClick={onMobileClose} // close mobile drawer after navigation
-                    aria-current={active ? "page" : undefined}
-                    className={cn(
-                      "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-                      active
-                        ? "bg-primary text-primary-foreground"
-                        : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                    )}
-                  >
-                    <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
-                    {label}
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
+          {sections.map((section, sectionIdx) => (
+            <div key={section.label} className={cn(sectionIdx > 0 && "mt-6")}>
+              {/* Section header */}
+              <p className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-[0.15em] text-sidebar-section">
+                {section.label}
+              </p>
+
+              <ul className="space-y-0.5">
+                {section.items.map(({ href, label, icon: Icon }) => {
+                  const active = isActive(href);
+                  return (
+                    <li key={href}>
+                      <Link
+                        href={href}
+                        onClick={onMobileClose}
+                        aria-current={active ? "page" : undefined}
+                        className={cn(
+                          "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                          active
+                            ? "bg-sidebar-active text-sidebar-active-foreground"
+                            : "text-sidebar-foreground hover:bg-sidebar-active/60 hover:text-sidebar-active-foreground"
+                        )}
+                      >
+                        <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+                        {label}
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          ))}
         </nav>
 
-        {/* ── Role badge footer ─────────────────────────────────────────── */}
-        <div className="shrink-0 border-t px-5 py-3">
-          <p className="text-[10px] uppercase tracking-widest text-muted-foreground">
-            Signed in as
-          </p>
-          <p className="mt-0.5 text-xs font-semibold text-foreground">
-            {ROLE_LABELS[role] ?? role}
-          </p>
+        {/* ── User footer ──────────────────────────────────────────────── */}
+        <div className="shrink-0 border-t border-sidebar-border px-4 py-3">
+          <div className="flex items-center gap-3">
+            {/* Avatar circle */}
+            <div
+              className={cn(
+                "flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-bold text-white",
+                avatar.bg
+              )}
+            >
+              {avatar.initials}
+            </div>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-medium text-sidebar-active-foreground">
+                {ROLE_LABELS[role] ?? role}
+              </p>
+              {displayName && (
+                <p className="truncate text-[11px] text-sidebar-foreground/80">
+                  {displayName}
+                </p>
+              )}
+            </div>
+          </div>
         </div>
       </aside>
     </>

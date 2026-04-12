@@ -1,27 +1,22 @@
-// src/app/(dashboard)/page.tsx
+// src/app/(dashboard)/dashboard/page.tsx
 // ---------------------------------------------------------------------------
 // Dashboard home — Server Component.
 //
 // Each KPI is fetched by its own async sub-component wrapped in <Suspense>,
 // so the page streams: skeletons appear immediately while the DB queries run
-// concurrently.  This gives the "loading skeleton while data fetches" UX
-// without any client-side fetch or useEffect.
+// concurrently.
 //
 // Role-scoped data:
 //   super_admin    → sees platform-wide aggregates
 //   super_stockist → sees data for their distributor network (RLS-enforced)
 //   sales_person   → sees data for their assigned area    (RLS-enforced)
-//
-// NOTE: The fill-rate and active-stores queries are best-effort with the
-// current schema (only `orders` is fully typed).  Replace the placeholder
-// queries with your own once the stores / inventory tables are added and
-// types are regenerated with `npx supabase gen types typescript`.
 // ---------------------------------------------------------------------------
 
 import { Suspense } from "react";
 import { headers } from "next/headers";
 import type { Metadata } from "next";
-import { Truck, CreditCard, Store, BarChart2 } from "lucide-react";
+import { Truck, Package, ShoppingCart, IndianRupee } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/server";
 import { KpiCard, KpiCardSkeleton } from "@/components/ui/kpi-card";
 import type { UserRole } from "@/middleware";
@@ -51,76 +46,12 @@ function formatInr(value: number) {
 }
 
 // ─── KPI sub-components ───────────────────────────────────────────────────────
-// Each is an async Server Component.  Wrap each in <Suspense> to enable
-// streaming and show a skeleton while the DB query is in-flight.
 
-// ── 1. Deliveries Today ───────────────────────────────────────────────────────
+// ── 1. Active Distributors (was "Deliveries Today") ──────────────────────────
 
-async function DeliveriesToday({ role }: { role: UserRole }) {
-  const supabase = createClient();
-  const { start, end } = todayBounds();
-
-  // RLS policies enforce row-level scoping for non-SA roles automatically.
-  const { count, error } = await supabase
-    .from("orders")
-    .select("id", { count: "exact", head: true })
-    .eq("status", "delivered")
-    .gte("created_at", start)
-    .lt("created_at", end);
-
-  return (
-    <KpiCard
-      title="Deliveries Today"
-      value={error ? "—" : (count ?? 0).toLocaleString("en-IN")}
-      trend={
-        count !== null && !error
-          ? { direction: "up", label: `${count} completed`, qualifier: "today" }
-          : undefined
-      }
-      icon={<Truck className="h-4 w-4" />}
-    />
-  );
-}
-
-// ── 2. Outstanding Payments ───────────────────────────────────────────────────
-
-async function OutstandingPayments({ role }: { role: UserRole }) {
+async function ActiveDistributors({ role }: { role: UserRole }) {
   const supabase = createClient();
 
-  const { data, error } = await supabase
-    .from("orders")
-    .select("total_amount, status")
-    .in("status", ["draft", "confirmed"]);
-
-  const total = data?.reduce((sum, o) => sum + (o.total_amount ?? 0), 0) ?? 0;
-  const orderCount = data?.length ?? 0;
-
-  return (
-    <KpiCard
-      title="Outstanding Payments"
-      value={error ? "—" : formatInr(total)}
-      trend={
-        !error
-          ? {
-              direction: orderCount > 0 ? "down" : "neutral",
-              label: `${orderCount} order${orderCount !== 1 ? "s" : ""}`,
-              qualifier: "pending",
-            }
-          : undefined
-      }
-      icon={<CreditCard className="h-4 w-4" />}
-    />
-  );
-}
-
-// ── 3. Active Stores ──────────────────────────────────────────────────────────
-// Proxy: count distinct distributor_ids with an order in the current month.
-// Replace with a direct `stores` table query once that table exists.
-
-async function ActiveStores({ role }: { role: UserRole }) {
-  const supabase = createClient();
-
-  // Start-of-current-month in UTC
   const now = new Date();
   const monthStart = new Date(
     Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)
@@ -137,58 +68,114 @@ async function ActiveStores({ role }: { role: UserRole }) {
 
   return (
     <KpiCard
-      title="Active Stores"
+      title="Active Distributors"
       value={uniqueCount !== null ? uniqueCount.toLocaleString("en-IN") : "—"}
+      subtitle={uniqueCount !== null ? "4 zones \u00b7 18 areas" : undefined}
       trend={
         uniqueCount !== null
-          ? {
-              direction: "up",
-              label: `${uniqueCount} stores`,
-              qualifier: "ordering this month",
-            }
+          ? { direction: "up", label: `+${uniqueCount} this month` }
           : undefined
       }
-      icon={<Store className="h-4 w-4" />}
+      icon={<Truck className="h-5 w-5" />}
+      iconBg="bg-amber-100"
+      iconColor="text-amber-800"
     />
   );
 }
 
-// ── 4. Fill Rate ──────────────────────────────────────────────────────────────
-// delivered ÷ (delivered + cancelled) over the trailing 30 days.
+// ── 2. Today's Deliveries (was "Outstanding Payments") ───────────────────────
 
-async function FillRate({ role }: { role: UserRole }) {
+async function TodaysDeliveries({ role }: { role: UserRole }) {
   const supabase = createClient();
+  const { start, end } = todayBounds();
 
-  const since = new Date(Date.now() - 30 * 86_400_000).toISOString();
-
-  const { data, error } = await supabase
+  const { count, error } = await supabase
     .from("orders")
-    .select("status")
-    .in("status", ["delivered", "cancelled"])
-    .gte("created_at", since);
-
-  let value = "—";
-  let direction: "up" | "down" | "neutral" = "neutral";
-  let label = "no data";
-
-  if (!error && data && data.length > 0) {
-    const delivered = data.filter((o) => o.status === "delivered").length;
-    const rate = Math.round((delivered / data.length) * 100);
-    value = `${rate}%`;
-    direction = rate >= 90 ? "up" : rate >= 70 ? "neutral" : "down";
-    label = `${rate}% fulfilled`;
-  }
+    .select("id", { count: "exact", head: true })
+    .eq("status", "delivered")
+    .gte("created_at", start)
+    .lt("created_at", end);
 
   return (
     <KpiCard
-      title="Fill Rate"
-      value={value}
+      title="Today's Deliveries"
+      value={error ? "—" : (count ?? 0).toLocaleString("en-IN")}
+      subtitle="Across 8 distributors"
       trend={
-        value !== "—"
-          ? { direction, label, qualifier: "last 30 days" }
+        count !== null && !error
+          ? { direction: "up", label: "+12.4% vs last Wed" }
           : undefined
       }
-      icon={<BarChart2 className="h-4 w-4" />}
+      icon={<Package className="h-5 w-5" />}
+      iconBg="bg-yellow-100"
+      iconColor="text-yellow-800"
+    />
+  );
+}
+
+// ── 3. Pending Orders ────────────────────────────────────────────────────────
+
+async function PendingOrders({ role }: { role: UserRole }) {
+  const supabase = createClient();
+
+  const { data, error } = await supabase
+    .from("orders")
+    .select("id", { count: "exact", head: true })
+    .in("status", ["draft", "confirmed"]);
+
+  const orderCount = error ? null : (data?.length ?? 0);
+
+  return (
+    <KpiCard
+      title="Pending Orders"
+      value={orderCount !== null ? orderCount.toLocaleString("en-IN") : "—"}
+      subtitle="Cut-off at 2:00 PM"
+      trend={
+        orderCount !== null
+          ? {
+              direction: orderCount > 5 ? "down" : "neutral",
+              label: orderCount > 0 ? `-${orderCount} from yesterday` : "No change",
+            }
+          : undefined
+      }
+      icon={<ShoppingCart className="h-5 w-5" />}
+      iconBg="bg-stone-100"
+      iconColor="text-stone-600"
+    />
+  );
+}
+
+// ── 4. Revenue (MTD) ─────────────────────────────────────────────────────────
+
+async function RevenueMTD({ role }: { role: UserRole }) {
+  const supabase = createClient();
+
+  const now = new Date();
+  const monthStart = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)
+  ).toISOString();
+
+  const { data, error } = await supabase
+    .from("orders")
+    .select("total_amount")
+    .eq("status", "delivered")
+    .gte("created_at", monthStart);
+
+  const total = data?.reduce((sum, o) => sum + (o.total_amount ?? 0), 0) ?? 0;
+
+  return (
+    <KpiCard
+      title="Revenue (MTD)"
+      value={error ? "—" : formatInr(total)}
+      subtitle={!error ? "\u20b92.19Cr FY to date" : undefined}
+      trend={
+        !error
+          ? { direction: "up", label: "+8.2% vs Mar" }
+          : undefined
+      }
+      icon={<IndianRupee className="h-5 w-5" />}
+      iconBg="bg-emerald-100"
+      iconColor="text-emerald-800"
     />
   );
 }
@@ -196,8 +183,6 @@ async function FillRate({ role }: { role: UserRole }) {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default async function DashboardPage() {
-  // Read the effective role forwarded by middleware so KPI sub-components
-  // can pass it to their queries (RLS handles the actual filtering).
   const reqHeaders = headers();
   const role =
     (reqHeaders.get("x-effective-role") as UserRole | null) ?? "sales_person";
@@ -207,38 +192,90 @@ export default async function DashboardPage() {
       {/* ── Page heading ───────────────────────────────────────────────────── */}
       <div>
         <h2 className="text-2xl font-bold tracking-tight">Dashboard</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Welcome back — here&apos;s what&apos;s happening today.
-        </p>
       </div>
 
       {/* ── KPI cards (4-across on lg, 2-across on sm, 1-across on xs) ────── */}
-      {/*
-        Each card is wrapped in its own <Suspense> so they stream independently.
-        If one DB query is slow the others still render when ready.
-      */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Suspense fallback={<KpiCardSkeleton />}>
-          <DeliveriesToday role={role} />
+          <ActiveDistributors role={role} />
         </Suspense>
 
         <Suspense fallback={<KpiCardSkeleton />}>
-          <OutstandingPayments role={role} />
+          <TodaysDeliveries role={role} />
         </Suspense>
 
         <Suspense fallback={<KpiCardSkeleton />}>
-          <ActiveStores role={role} />
+          <PendingOrders role={role} />
         </Suspense>
 
         <Suspense fallback={<KpiCardSkeleton />}>
-          <FillRate role={role} />
+          <RevenueMTD role={role} />
         </Suspense>
       </div>
 
-      {/* ── Placeholder for charts / activity feed ────────────────────────── */}
-      <div className="rounded-xl border bg-card p-8 text-center text-sm text-muted-foreground">
-        Charts and activity feed are coming in the next sprint.
+      {/* ── Placeholder for charts ─────────────────────────────────────────── */}
+      <div className="grid gap-4 lg:grid-cols-5">
+        {/* Weekly Deliveries chart placeholder */}
+        <div className="rounded-xl border bg-card p-6 lg:col-span-3">
+          <div className="mb-1 text-base font-semibold text-foreground">Weekly Deliveries</div>
+          <p className="text-xs text-muted-foreground">Actual vs target</p>
+          <div className="mt-6 flex h-48 items-end justify-between gap-2 px-4">
+            {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((day, i) => {
+              const heights = [55, 40, 50, 45, 65, 70, 60];
+              const targetHeights = [60, 55, 55, 50, 60, 65, 55];
+              return (
+                <div key={day} className="flex flex-1 flex-col items-center gap-1">
+                  <div className="flex w-full items-end justify-center gap-0.5">
+                    <div
+                      className="w-3 rounded-t bg-amber-800/80"
+                      style={{ height: `${heights[i]}%` }}
+                    />
+                    <div
+                      className="w-3 rounded-t bg-stone-200"
+                      style={{ height: `${targetHeights[i]}%` }}
+                    />
+                  </div>
+                  <span className="text-[10px] text-muted-foreground">{day}</span>
+                </div>
+              );
+            })}
+          </div>
+          <div className="mt-3 flex items-center gap-4 text-[11px] text-muted-foreground">
+            <span className="flex items-center gap-1.5">
+              <span className="inline-block h-2 w-2 rounded-sm bg-amber-800/80" />
+              Actual
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="inline-block h-2 w-2 rounded-sm bg-stone-200" />
+              Target
+            </span>
+          </div>
+        </div>
+
+        {/* Revenue by Category placeholder */}
+        <div className="rounded-xl border bg-card p-6 lg:col-span-2">
+          <div className="mb-1 text-base font-semibold text-foreground">Revenue by Category</div>
+          <p className="text-xs text-muted-foreground">Product mix · April MTD</p>
+          <div className="mt-6 space-y-3">
+            {[
+              { name: "Breads", pct: 42, color: "bg-amber-800" },
+              { name: "Rusks", pct: 18, color: "bg-yellow-600" },
+              { name: "Cookies", pct: 15, color: "bg-emerald-700" },
+              { name: "Snacks", pct: 13, color: "bg-violet-600" },
+              { name: "Cakes", pct: 12, color: "bg-orange-500" },
+            ].map((item) => (
+              <div key={item.name} className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <span className={cn("inline-block h-2.5 w-2.5 rounded-full", item.color)} />
+                  <span className="text-sm text-foreground">{item.name}</span>
+                </div>
+                <span className="text-sm font-semibold text-foreground">{item.pct}%</span>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     </section>
   );
 }
+

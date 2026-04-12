@@ -1,13 +1,12 @@
 // src/components/ui/kpi-card.tsx
 // ---------------------------------------------------------------------------
-// Reusable KPI card with optional trend indicator + a loading skeleton.
-// Self-contained — no external shadcn dependency (skeleton is inlined).
+// Reusable KPI card with coloured icon circle + trend badge.
+// Matches the TopNTown DMS warm dashboard design system.
 // ---------------------------------------------------------------------------
 
-import { TrendingUp, TrendingDown, Minus } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-// ─── Inline pulse skeleton (avoids depending on an optional shadcn component) ─
+// ─── Inline pulse skeleton ──────────────────────────────────────────────────
 
 function Pulse({ className }: { className?: string }) {
   return <div className={cn("animate-pulse rounded-md bg-muted", className)} />;
@@ -18,26 +17,30 @@ function Pulse({ className }: { className?: string }) {
 export interface KpiTrend {
   /**
    * Visual direction of the indicator:
-   *   "up"      → emerald TrendingUp arrow (positive change)
-   *   "down"    → red TrendingDown arrow  (negative change)
-   *   "neutral" → muted dash icon
+   *   "up"      → green badge  (positive change)
+   *   "down"    → red badge    (negative change)
+   *   "neutral" → muted badge
    */
   direction: "up" | "down" | "neutral";
   /** Primary trend label, e.g. "+12.5%" or "3 pending". */
   label: string;
-  /** Optional softer qualifier, e.g. "vs yesterday". */
-  qualifier?: string;
 }
 
 export interface KpiCardProps {
-  /** Metric name shown above the value. */
+  /** Metric name shown below the value. */
   title: string;
   /** Formatted value string, e.g. "142" or "₹4.2L". */
   value: string | number;
-  /** Optional trend row rendered below the value. */
+  /** Subtitle line below the title. */
+  subtitle?: string;
+  /** Optional trend badge rendered in the top-right corner. */
   trend?: KpiTrend;
-  /** Small Lucide icon placed in the top-right corner. */
+  /** Icon element — rendered inside a coloured circle. */
   icon?: React.ReactNode;
+  /** Background class for the icon circle, e.g. "bg-amber-100". */
+  iconBg?: string;
+  /** Text colour class for the icon, e.g. "text-amber-700". */
+  iconColor?: string;
   className?: string;
 }
 
@@ -52,33 +55,40 @@ export function KpiCardSkeleton({ className }: { className?: string }) {
       )}
       aria-label="Loading metric…"
     >
-      <div className="flex items-center justify-between">
-        <Pulse className="h-3.5 w-28" />
-        <Pulse className="h-4 w-4 rounded-full" />
+      <div className="flex items-start justify-between">
+        <Pulse className="h-10 w-10 rounded-full" />
+        <Pulse className="h-5 w-20 rounded-full" />
       </div>
       <Pulse className="h-8 w-24" />
+      <Pulse className="h-3 w-32" />
       <Pulse className="h-3 w-20" />
     </div>
   );
 }
 
+// ─── Trend badge colours ─────────────────────────────────────────────────────
+
+const TREND_STYLES: Record<
+  "up" | "down" | "neutral",
+  string
+> = {
+  up: "bg-emerald-50 text-emerald-700 border-emerald-200",
+  down: "bg-red-50 text-red-700 border-red-200",
+  neutral: "bg-stone-100 text-stone-600 border-stone-200",
+};
+
 // ─── KPI Card ─────────────────────────────────────────────────────────────────
 
-export function KpiCard({ title, value, trend, icon, className }: KpiCardProps) {
-  const TrendIcon =
-    trend?.direction === "up"
-      ? TrendingUp
-      : trend?.direction === "down"
-      ? TrendingDown
-      : Minus;
-
-  const trendColour =
-    trend?.direction === "up"
-      ? "text-emerald-600 dark:text-emerald-400"
-      : trend?.direction === "down"
-      ? "text-red-500 dark:text-red-400"
-      : "text-muted-foreground";
-
+export function KpiCard({
+  title,
+  value,
+  subtitle,
+  trend,
+  icon,
+  iconBg = "bg-stone-100",
+  iconColor = "text-stone-600",
+  className,
+}: KpiCardProps) {
   return (
     <div
       className={cn(
@@ -86,35 +96,46 @@ export function KpiCard({ title, value, trend, icon, className }: KpiCardProps) 
         className
       )}
     >
-      {/* ── Header row ────────────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between">
-        <p className="text-sm font-medium text-muted-foreground">{title}</p>
+      {/* ── Top row: icon circle + trend badge ────────────────────────────── */}
+      <div className="flex items-start justify-between">
+        {/* Coloured icon circle */}
         {icon && (
-          <span className="text-muted-foreground" aria-hidden="true">
+          <div
+            className={cn(
+              "flex h-10 w-10 items-center justify-center rounded-full",
+              iconBg,
+              iconColor
+            )}
+            aria-hidden="true"
+          >
             {icon}
+          </div>
+        )}
+
+        {/* Trend badge */}
+        {trend && (
+          <span
+            className={cn(
+              "inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold",
+              TREND_STYLES[trend.direction]
+            )}
+          >
+            {trend.label}
           </span>
         )}
       </div>
 
       {/* ── Primary value ─────────────────────────────────────────────────── */}
-      <p className="mt-2 text-3xl font-bold tracking-tight text-foreground">
+      <p className="mt-4 text-3xl font-bold tracking-tight text-foreground">
         {value}
       </p>
 
-      {/* ── Trend row ─────────────────────────────────────────────────────── */}
-      {trend && (
-        <p
-          className={cn(
-            "mt-1.5 flex items-center gap-1 text-xs",
-            trendColour
-          )}
-        >
-          <TrendIcon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-          <span className="font-medium">{trend.label}</span>
-          {trend.qualifier && (
-            <span className="text-muted-foreground">{trend.qualifier}</span>
-          )}
-        </p>
+      {/* ── Title ─────────────────────────────────────────────────────────── */}
+      <p className="mt-1 text-sm font-medium text-muted-foreground">{title}</p>
+
+      {/* ── Subtitle ──────────────────────────────────────────────────────── */}
+      {subtitle && (
+        <p className="mt-0.5 text-xs text-muted-foreground/70">{subtitle}</p>
       )}
     </div>
   );
