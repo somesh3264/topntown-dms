@@ -30,6 +30,7 @@ import { type NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { generateBillForOrder } from "@/lib/billing";
 import { todayISODate } from "@/lib/billing";
+import { sendMessage } from "@/lib/whatsapp";
 
 export async function GET(request: NextRequest) {
   // ── 1. Authenticate cron request ──────────────────────────────────────────
@@ -74,6 +75,7 @@ export async function GET(request: NextRequest) {
 
   // ── 3. Generate a bill for each order ─────────────────────────────────────
   let billsGenerated = 0;
+  let notificationsSent = 0;
   const errors: Array<{ orderId: string; error: string }> = [];
 
   for (const order of confirmedOrders) {
@@ -86,6 +88,22 @@ export async function GET(request: NextRequest) {
       console.log(
         `[cron/generate-bills] ✓ Order ${orderId} → Bill ${result.billNumber} (${result.billId})`
       );
+
+      // ── 3a. WhatsApp: notify distributor that the bill is ready ─────────
+      // The PDF is generated asynchronously by the generate-bill-pdf Edge
+      // Function (triggered by INSERT on bills). We wait briefly so the
+      // pdf_url is usually populated by the time we send; if it isn't, we
+      // still notify with the dashboard URL as a fallback.
+      try {
+        const notified = await notifyBillReady(supabase, result.billId!);
+        if (notified) notificationsSent++;
+      } catch (notifyErr) {
+        console.error(
+          `[cron/generate-bills] WhatsApp notify failed for bill ${result.billId}:`,
+          notifyErr,
+        );
+        // A failed notification is NOT a failed bill — logged in whatsapp_logs for retry.
+      }
     } else {
       const errMsg = result.error ?? "Unknown error";
       console.error(`[cron/generate-bills] ✗ Order ${orderId} failed: ${errMsg}`);
@@ -105,9 +123,83 @@ export async function GET(request: NextRequest) {
       success: !hasErrors,
       date: today,
       billsGenerated,
+      notificationsSent,
       totalOrders: confirmedOrders.length,
       errors: hasErrors ? errors : undefined,
     },
     { status: hasErrors ? 207 : 200 } // 207 Multi-Status if partial failures
   );
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * Send the `bill_ready` WhatsApp to the distributor for a freshly-generated bill.
+ * Returns true on success. All attempts are persisted to `whatsapp_logs`.
+ */
+async function notifyBillReady(
+  supabase: ReturnType<typeof createAdminClient>,
+  billId: string,
+): Promise<boolean> {
+  // Poll briefly for the pdf_url — the generate-bill-pdf Edge Function usually
+  // populates it within ~2s of the INSERT trigger firing.
+  let pdfUrl: string | null = null;
+  let billNumber: string | null = null;
+  let totalAmount: number | null = null;
+  let distributorId: string | null = null;
+
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const { data } = await supabase
+      .from("bills")
+      .select("bill_number, pdf_url, total_amount, distributor_id")
+      .eq("id", billId)
+      .single();
+
+    if (data) {
+      billNumber = (data as { bill_number: string }).bill_number;
+      totalAmount = Number((data as { total_amount: number | string }).total_amount ?? 0);
+      distributorId = (data as { distributor_id: string }).distributor_id;
+      pdfUrl = (data as { pdf_url: string | null }).pdf_url ?? null;
+      if (pdfUrl) break;
+    }
+    await new Promise((r) => setTimeout(r, 1200));
+  }
+
+  if (!distributorId || !billNumber) return false;
+
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("full_name, phone")
+    .eq("id", distributorId)
+    .single();
+
+  const phone = (profile as { phone?: string | null } | null)?.phone;
+  if (!phone) {
+    console.warn(`[cron/generate-bills] No phone for distributor ${distributorId}, skipping WA`);
+    return false;
+  }
+
+  const amountInr = (totalAmount ?? 0).toLocaleString("en-IN", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+
+  const viewUrl =
+    pdfUrl ??
+    `${process.env.NEXT_PUBLIC_APP_URL ?? ""}/dashboard/orders/${billId}`.replace(/^\//, "/");
+
+  const res = await sendMessage(
+    phone,
+    "bill_ready",
+    {
+      distributor_name:
+        (profile as { full_name?: string | null } | null)?.full_name ?? "Distributor",
+      bill_number: billNumber,
+      amount_inr: amountInr,
+      pdf_url: viewUrl,
+    },
+    { context: { entityType: "bill", entityId: billId } },
+  );
+
+  return res.success;
 }
