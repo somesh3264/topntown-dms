@@ -303,6 +303,151 @@ export async function createUser(
 }
 
 /**
+ * Update an existing user's profile fields.
+ *
+ * Mutable fields: full_name, phone, role, zone_id, area_id.
+ *
+ * Password changes and is_active toggles are intentionally out of scope —
+ * password resets belong in a dedicated flow and active state has its own
+ * activate/deactivate actions so the deactivation guards can run.
+ *
+ * If the phone changes we also update the corresponding auth.users email
+ * (since we use {phone}@topntown.local as the synthetic email) and the
+ * user_metadata so the auth record stays in sync with profiles. This keeps
+ * login working with the new phone after the edit.
+ *
+ * Zone/area requirements mirror createUser:
+ *   - super_stockist: zone required
+ *   - distributor, sales_person: zone AND area required
+ *   - super_admin: neither required (and is rejected from edits)
+ */
+export async function updateUser(
+  id: string,
+  formData: FormData
+): Promise<ActionResult<UserRow>> {
+  const full_name = (formData.get("full_name") as string)?.trim();
+  const phone = (formData.get("phone") as string)?.trim();
+  const role = formData.get("role") as AppRole;
+  const zone_id = (formData.get("zone_id") as string) || null;
+  const area_id = (formData.get("area_id") as string) || null;
+
+  // ── Validation ────────────────────────────────────────────────────────────
+  if (!id) return { success: false, error: "User id is required." };
+  if (!full_name) return { success: false, error: "Full name is required." };
+  if (!phone) return { success: false, error: "Phone number is required." };
+  if (!/^\d{10}$/.test(phone))
+    return { success: false, error: "Phone must be exactly 10 digits." };
+  if (!role) return { success: false, error: "Role is required." };
+  if (role === "super_admin")
+    return { success: false, error: "Super admin accounts cannot be edited here." };
+
+  if (["super_stockist", "distributor", "sales_person"].includes(role) && !zone_id) {
+    return { success: false, error: "Zone is required for this role." };
+  }
+  if (["distributor", "sales_person"].includes(role) && !area_id) {
+    return { success: false, error: "Area is required for this role." };
+  }
+
+  const adminSupabase = createAdminClient();
+
+  // ── Fetch current row (to detect phone/role changes and roll back cleanly) ──
+  const { data: current, error: fetchError } = await adminSupabase
+    .from("profiles")
+    .select("id, phone, role")
+    .eq("id", id)
+    .single();
+
+  if (fetchError || !current) {
+    return { success: false, error: "User not found." };
+  }
+
+  const phoneChanged = (current.phone ?? "") !== phone;
+
+  // ── If phone changed, update auth.users email + metadata first ────────────
+  // We do this before the profiles update so that a failure here leaves the
+  // profile row untouched (rather than the profile being ahead of auth).
+  if (phoneChanged) {
+    const newEmail = `${phone}@topntown.local`;
+    const { error: authErr } = await adminSupabase.auth.admin.updateUserById(id, {
+      email: newEmail,
+      user_metadata: { full_name, role, phone },
+    });
+    if (authErr) {
+      if (authErr.message.toLowerCase().includes("already")) {
+        return { success: false, error: "This phone number is already registered." };
+      }
+      console.error("[updateUser] auth.admin.updateUserById", authErr.message);
+      return { success: false, error: authErr.message };
+    }
+  } else {
+    // Still keep metadata in sync for name/role tweaks — cheap and idempotent.
+    await adminSupabase.auth.admin.updateUserById(id, {
+      user_metadata: { full_name, role, phone },
+    });
+  }
+
+  // ── Update profile row ────────────────────────────────────────────────────
+  const { error: updateError } = await adminSupabase
+    .from("profiles")
+    .update({
+      full_name,
+      phone,
+      role,
+      // Roles that don't need a zone/area get NULL so stale scoping doesn't
+      // linger after a role downgrade.
+      zone_id: zone_id || null,
+      area_id: area_id || null,
+    })
+    .eq("id", id);
+
+  if (updateError) {
+    console.error("[updateUser] profiles update", updateError.message);
+    return { success: false, error: updateError.message };
+  }
+
+  // ── Re-read with joined zone/area names so the UI can show the new values ──
+  const { data: refreshed, error: refreshError } = await adminSupabase
+    .from("profiles")
+    .select(`
+      id,
+      full_name,
+      phone,
+      role,
+      zone_id,
+      area_id,
+      is_active,
+      created_at,
+      zones:zone_id ( name ),
+      areas:area_id ( name )
+    `)
+    .eq("id", id)
+    .single();
+
+  if (refreshError || !refreshed) {
+    // The update already succeeded; surface a partial success so the caller
+    // can refetch the table if it wants to.
+    revalidatePath("/dashboard/users");
+    return { success: true };
+  }
+
+  const row: UserRow = {
+    id: (refreshed as any).id,
+    full_name: (refreshed as any).full_name,
+    phone: (refreshed as any).phone,
+    role: (refreshed as any).role as AppRole,
+    zone_id: (refreshed as any).zone_id,
+    zone_name: (refreshed as any).zones?.name ?? null,
+    area_id: (refreshed as any).area_id,
+    area_name: (refreshed as any).areas?.name ?? null,
+    is_active: (refreshed as any).is_active,
+    created_at: (refreshed as any).created_at,
+  };
+
+  revalidatePath("/dashboard/users");
+  return { success: true, data: row };
+}
+
+/**
  * Deactivate a user.
  *
  * Guard: blocked if the user has open orders (for distributors) or

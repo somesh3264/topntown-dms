@@ -21,6 +21,7 @@ import {
   UserCheck,
   UserX,
   ShieldCheck,
+  Pencil,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -45,6 +46,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import {
   createUser,
+  updateUser,
   deactivateUser,
   activateUser,
   startImpersonation,
@@ -336,6 +338,246 @@ function AddUserModal({ open, onClose, zones, onSuccess }: AddUserModalProps) {
   );
 }
 
+// ─── Edit User Modal ──────────────────────────────────────────────────────────
+
+interface EditUserModalProps {
+  user: UserRow | null;
+  zones: { id: string; name: string }[];
+  onClose: () => void;
+  onSuccess: (user: UserRow) => void;
+}
+
+/**
+ * Edit an existing user's profile. Pre-fills from the row, omits the password
+ * field (password resets live in a separate flow), and preserves the same
+ * conditional Zone/Area logic as AddUserModal so roles that don't need scoping
+ * don't leave stale zone/area IDs on the profile.
+ *
+ * When the role changes, zone & area reset just like in the Add flow. When the
+ * zone changes (either manually or after a role change) we refetch the areas
+ * list — but crucially, if the zone is unchanged from the initial load we do
+ * NOT clear the pre-filled area. Otherwise opening the dialog for an existing
+ * distributor would silently blank out their area until the user re-selects it.
+ */
+function EditUserModal({ user, zones, onClose, onSuccess }: EditUserModalProps) {
+  const { toast } = useToast();
+  const [pending, startTransition] = useTransition();
+
+  const [fullName, setFullName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [role, setRole] = useState<AppRole | "">("");
+  const [zoneId, setZoneId] = useState("");
+  const [areaId, setAreaId] = useState("");
+  const [areas, setAreas] = useState<{ id: string; name: string }[]>([]);
+  const [areasLoading, setAreasLoading] = useState(false);
+
+  // Remember the user's original zone id so we know whether a zone-change
+  // side-effect should clear the pre-filled area.
+  const [initialZoneId, setInitialZoneId] = useState<string>("");
+
+  const needsZone =
+    role === "super_stockist" || role === "distributor" || role === "sales_person";
+  const needsArea = role === "distributor" || role === "sales_person";
+
+  // Seed form state whenever the target user changes (i.e. the modal opens).
+  useEffect(() => {
+    if (!user) return;
+    setFullName(user.full_name ?? "");
+    setPhone(user.phone ?? "");
+    setRole(user.role);
+    setZoneId(user.zone_id ?? "");
+    setAreaId(user.area_id ?? "");
+    setInitialZoneId(user.zone_id ?? "");
+    setAreas([]);
+  }, [user]);
+
+  // Load areas when zone changes. We *don't* wipe areaId when the zone matches
+  // the initial load, so the pre-filled area survives the first render.
+  useEffect(() => {
+    if (!zoneId) {
+      setAreas([]);
+      setAreaId("");
+      return;
+    }
+    setAreasLoading(true);
+    if (zoneId !== initialZoneId) {
+      setAreaId("");
+    }
+    getAreasForZone(zoneId).then((data) => {
+      setAreas(data);
+      setAreasLoading(false);
+    });
+  }, [zoneId, initialZoneId]);
+
+  // If role changes to one that doesn't need zone/area, clear them so the
+  // server action writes NULLs.
+  useEffect(() => {
+    if (!needsZone) {
+      setZoneId("");
+      setAreaId("");
+      setAreas([]);
+    }
+    if (needsZone && !needsArea) {
+      setAreaId("");
+    }
+  }, [role, needsZone, needsArea]);
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!user) return;
+    const fd = new FormData();
+    fd.set("full_name", fullName);
+    fd.set("phone", phone);
+    fd.set("role", role);
+    if (zoneId) fd.set("zone_id", zoneId);
+    if (areaId) fd.set("area_id", areaId);
+
+    startTransition(async () => {
+      const result = await updateUser(user.id, fd);
+      if (!result.success) {
+        toast({ title: "Error", description: result.error, variant: "destructive" });
+        return;
+      }
+      toast({ title: "User updated", description: `${fullName}'s details have been saved.` });
+
+      // Prefer the server-returned row (joined zone/area names). Fall back to a
+      // locally-built row when the refresh step failed but the update didn't.
+      const updated: UserRow = result.data ?? {
+        ...user,
+        full_name: fullName,
+        phone,
+        role: role as AppRole,
+        zone_id: zoneId || null,
+        zone_name: zones.find((z) => z.id === zoneId)?.name ?? null,
+        area_id: areaId || null,
+        area_name: areas.find((a) => a.id === areaId)?.name ?? null,
+      };
+      onSuccess(updated);
+      onClose();
+    });
+  }
+
+  return (
+    <Dialog open={!!user} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Edit User</DialogTitle>
+          <DialogDescription>
+            Update this user's details. Changing the phone number also updates
+            their login identifier.
+          </DialogDescription>
+        </DialogHeader>
+
+        <form onSubmit={handleSubmit} className="space-y-4 pt-2">
+          {/* Full name */}
+          <div className="space-y-1.5">
+            <Label htmlFor="eu-name">Full Name</Label>
+            <Input
+              id="eu-name"
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+              placeholder="e.g. Ravi Kumar"
+              required
+            />
+          </div>
+
+          {/* Phone */}
+          <div className="space-y-1.5">
+            <Label htmlFor="eu-phone">Phone (10 digits)</Label>
+            <Input
+              id="eu-phone"
+              value={phone}
+              onChange={(e) =>
+                setPhone(e.target.value.replace(/\D/g, "").slice(0, 10))
+              }
+              placeholder="9876543210"
+              inputMode="numeric"
+              required
+            />
+          </div>
+
+          {/* Role */}
+          <div className="space-y-1.5">
+            <Label htmlFor="eu-role">Role</Label>
+            <Select value={role} onValueChange={(v) => setRole(v as AppRole)}>
+              <SelectTrigger id="eu-role">
+                <SelectValue placeholder="Select a role…" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="super_stockist">Super Stockist</SelectItem>
+                <SelectItem value="distributor">Distributor</SelectItem>
+                <SelectItem value="sales_person">Sales Person</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* Zone (conditional) */}
+          {needsZone && (
+            <div className="space-y-1.5">
+              <Label htmlFor="eu-zone">Zone</Label>
+              <Select value={zoneId} onValueChange={setZoneId}>
+                <SelectTrigger id="eu-zone">
+                  <SelectValue placeholder="Select zone…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {zones.map((z) => (
+                    <SelectItem key={z.id} value={z.id}>
+                      {z.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          {/* Area (conditional) */}
+          {needsArea && (
+            <div className="space-y-1.5">
+              <Label htmlFor="eu-area">Area</Label>
+              <Select
+                value={areaId}
+                onValueChange={setAreaId}
+                disabled={!zoneId || areasLoading}
+              >
+                <SelectTrigger id="eu-area">
+                  <SelectValue
+                    placeholder={
+                      !zoneId
+                        ? "Select a zone first"
+                        : areasLoading
+                        ? "Loading…"
+                        : areas.length === 0
+                        ? "No areas in this zone"
+                        : "Select area…"
+                    }
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  {areas.map((a) => (
+                    <SelectItem key={a.id} value={a.id}>
+                      {a.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          <DialogFooter className="pt-2">
+            <Button type="button" variant="outline" onClick={onClose} disabled={pending}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={pending}>
+              {pending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Save Changes
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ─── Confirm Deactivate Dialog ────────────────────────────────────────────────
 
 interface ConfirmDeactivateProps {
@@ -382,6 +624,7 @@ export function UsersClient({ initialUsers, zones }: UsersClientProps) {
   const [users, setUsers] = useState<UserRow[]>(initialUsers);
   const [tab, setTab] = useState<RoleFilter>("all");
   const [addOpen, setAddOpen] = useState(false);
+  const [editTarget, setEditTarget] = useState<UserRow | null>(null);
   const [deactivateTarget, setDeactivateTarget] = useState<UserRow | null>(null);
   const [deactivatePending, startDeactivateTransition] = useTransition();
   const [networkTarget, setNetworkTarget] = useState<UserRow | null>(null);
@@ -397,6 +640,10 @@ export function UsersClient({ initialUsers, zones }: UsersClientProps) {
 
   function handleUserCreated(user: UserRow) {
     setUsers((prev) => [user, ...prev]);
+  }
+
+  function handleUserUpdated(updated: UserRow) {
+    setUsers((prev) => prev.map((u) => (u.id === updated.id ? updated : u)));
   }
 
   function confirmDeactivate(user: UserRow) {
@@ -530,6 +777,7 @@ export function UsersClient({ initialUsers, zones }: UsersClientProps) {
                   <UserRow
                     key={user.id}
                     user={user}
+                    onEdit={setEditTarget}
                     onDeactivate={confirmDeactivate}
                     onActivate={handleActivate}
                     onImpersonate={handleImpersonate}
@@ -549,6 +797,13 @@ export function UsersClient({ initialUsers, zones }: UsersClientProps) {
         onClose={() => setAddOpen(false)}
         zones={zones}
         onSuccess={handleUserCreated}
+      />
+
+      <EditUserModal
+        user={editTarget}
+        zones={zones}
+        onClose={() => setEditTarget(null)}
+        onSuccess={handleUserUpdated}
       />
 
       <ConfirmDeactivateDialog
@@ -572,6 +827,7 @@ export function UsersClient({ initialUsers, zones }: UsersClientProps) {
 
 interface UserRowProps {
   user: UserRow;
+  onEdit: (u: UserRow) => void;
   onDeactivate: (u: UserRow) => void;
   onActivate: (u: UserRow) => Promise<void>;
   onImpersonate: (u: UserRow) => Promise<void>;
@@ -581,6 +837,7 @@ interface UserRowProps {
 
 function UserRow({
   user,
+  onEdit,
   onDeactivate,
   onActivate,
   onImpersonate,
@@ -665,6 +922,18 @@ function UserRow({
               Network
             </Button>
           )}
+
+          {/* Edit */}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => onEdit(user)}
+            className="h-7 px-2 text-xs"
+            title="Edit user details"
+          >
+            <Pencil className="mr-1 h-3.5 w-3.5" />
+            Edit
+          </Button>
 
           {/* Impersonate */}
           <Button
