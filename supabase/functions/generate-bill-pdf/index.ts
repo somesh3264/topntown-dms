@@ -45,8 +45,14 @@ interface ProfileRow {
   id: string;
   full_name: string | null;
   phone: string | null;
+  // Legacy singular scope — kept for back-compat.
   zones: { name: string | null } | null;
   areas: { name: string | null } | null;
+  // Multi-scope via junction tables (profile_zones / profile_areas).
+  // Returned by Supabase as an array of row objects, each wrapping the
+  // joined zones/areas row.
+  profile_zones?: { zones: { name: string | null } | null }[] | null;
+  profile_areas?: { areas: { name: string | null } | null }[] | null;
 }
 
 interface BillItemRow {
@@ -119,10 +125,15 @@ async function loadBillContext(supabase: SupabaseClient, billId: string) {
     throw new Error(`Bill not found: ${billErr?.message ?? billId}`);
   }
 
+  // Pull both the legacy singular zone/area AND the junction-table arrays so
+  // the PDF can show the full scope when a distributor covers multiple zones.
+  // If the junction tables don't exist yet (pre-migration deployments), the
+  // inner selects silently return empty arrays and we fall back to the
+  // singular fields.
   const { data: distributor, error: distErr } = await supabase
     .from("profiles")
     .select(
-      "id, full_name, phone, zones:zone_id ( name ), areas:area_id ( name )",
+      "id, full_name, phone, zones:zone_id ( name ), areas:area_id ( name ), profile_zones ( zones ( name ) ), profile_areas ( areas ( name ) )",
     )
     .eq("id", bill.distributor_id)
     .single<ProfileRow>();
@@ -197,11 +208,27 @@ function renderPdf(ctx: {
 
   doc.setFont("helvetica", "normal");
   doc.setFontSize(10);
+
+  // Prefer the multi-zone/multi-area arrays from the junction tables; fall
+  // back to the legacy singular name when the arrays are empty (older users).
+  const zoneNames = (distributor.profile_zones ?? [])
+    .map((pz) => pz.zones?.name)
+    .filter((n): n is string => Boolean(n));
+  const areaNames = (distributor.profile_areas ?? [])
+    .map((pa) => pa.areas?.name)
+    .filter((n): n is string => Boolean(n));
+  const zoneLabel = zoneNames.length
+    ? zoneNames.join(", ")
+    : distributor.zones?.name ?? "-";
+  const areaLabel = areaNames.length
+    ? areaNames.join(", ")
+    : distributor.areas?.name ?? "-";
+
   const distLines = [
     `Name : ${distributor.full_name ?? "-"}`,
     `Phone: ${distributor.phone ?? "-"}`,
-    `Zone : ${distributor.zones?.name ?? "-"}`,
-    `Area : ${distributor.areas?.name ?? "-"}`,
+    `Zone : ${zoneLabel}`,
+    `Area : ${areaLabel}`,
   ];
   distLines.forEach((l, i) => doc.text(l, margin, 138 + i * 14));
 

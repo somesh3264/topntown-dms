@@ -32,3 +32,6 @@ next-env.d.ts
 # OS
 .DS_Store
 Thumbs.db
+
+# Supabase CLI cache (per-developer machine state — not source of truth)
+supabase/.temp/
