@@ -3,14 +3,16 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Home, ShoppingBag, CreditCard, Package, User } from "lucide-react";
+import { Home, ClipboardList, Crosshair, CreditCard, Package } from "lucide-react";
 
+// Five-tab distributor nav: Home · Order · Deliver · Pay · Stock.
+// Profile removed — all identity info lives on the Home header.
 const tabs = [
-  { href: "/app", label: "Home", icon: Home },
-  { href: "/app/orders", label: "Orders", icon: ShoppingBag },
-  { href: "/app/payments", label: "Payments", icon: CreditCard },
-  { href: "/app/products", label: "Products", icon: Package },
-  { href: "/app/profile", label: "Profile", icon: User },
+  { href: "/app",         label: "Home",    icon: Home },
+  { href: "/app/order",   label: "Order",   icon: ClipboardList },
+  { href: "/app/deliver", label: "Deliver", icon: Crosshair },
+  { href: "/app/pay",     label: "Pay",     icon: CreditCard },
+  { href: "/app/stock",   label: "Stock",   icon: Package },
 ];
 
 export default function AppBottomNav() {

@@ -26,6 +26,7 @@ const ROLE_LABELS: Record<string, string> = {
   super_stockist: "Super Stockist",
   sales_person: "Sales Person",
   distributor: "Distributor",
+  dispatch_manager: "Dispatch Manager",
 };
 
 // ─── Breadcrumb helper ───────────────────────────────────────────────────────

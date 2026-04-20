@@ -83,33 +83,145 @@ async function ActiveDistributors({ role }: { role: UserRole }) {
   );
 }
 
-// ── 2. Today's Deliveries (was "Outstanding Payments") ───────────────────────
+// ── 2. Today's Deliveries (reads from the deliveries table, not orders) ─────
 
 async function TodaysDeliveries({ role }: { role: UserRole }) {
   const supabase = createClient();
-  const { start, end } = todayBounds();
+  // IST calendar date — deliveries.delivery_date is already stored in IST so
+  // a direct equality on the date column is cheap and index-friendly.
+  const todayIst = new Date()
+    .toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
 
-  const { count, error } = await supabase
-    .from("orders")
-    .select("id", { count: "exact", head: true })
-    .eq("status", "delivered")
-    .gte("created_at", start)
-    .lt("created_at", end);
+  const { data, error } = await supabase
+    .from("deliveries")
+    .select("total_value, distributor_id")
+    .eq("delivery_date", todayIst);
+
+  const rows = data ?? [];
+  const count = rows.length;
+  const revenue = rows.reduce(
+    (sum, d: { total_value: number | null }) => sum + Number(d.total_value ?? 0),
+    0,
+  );
+  const distributors = new Set(
+    rows.map((d: { distributor_id: string | null }) => d.distributor_id).filter(Boolean),
+  ).size;
 
   return (
     <KpiCard
       title="Today's Deliveries"
-      value={error ? "—" : (count ?? 0).toLocaleString("en-IN")}
-      subtitle="Across 8 distributors"
-      trend={
-        count !== null && !error
-          ? { direction: "up", label: "+12.4% vs last Wed" }
-          : undefined
+      value={error ? "—" : count.toLocaleString("en-IN")}
+      subtitle={
+        error
+          ? undefined
+          : `${formatInr(revenue)} collected · ${distributors} distributor${distributors === 1 ? "" : "s"}`
       }
       icon={<Package className="h-5 w-5" />}
       iconBg="bg-yellow-100"
       iconColor="text-yellow-800"
     />
+  );
+}
+
+// ── Recent Deliveries panel ─────────────────────────────────────────────────
+// Shows up to 10 most recent deliveries made today, across all distributors.
+// Uses the admin client intentionally so the panel works for super_admin /
+// super_stockist / sales_person regardless of the RLS surface on deliveries.
+
+async function RecentDeliveriesPanel() {
+  const admin = (await import("@/lib/supabase/admin")).createAdminClient();
+  const todayIst = new Date()
+    .toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+
+  const { data: deliveries, error } = await admin
+    .from("deliveries")
+    .select("id, store_id, distributor_id, total_value, item_count, created_at")
+    .eq("delivery_date", todayIst)
+    .order("created_at", { ascending: false })
+    .limit(10);
+
+  if (error || !deliveries?.length) {
+    return (
+      <div className="rounded-xl border bg-card p-6">
+        <div className="mb-1 text-base font-semibold text-foreground">
+          Recent Deliveries
+        </div>
+        <p className="text-xs text-muted-foreground">Today, across all distributors</p>
+        <div className="mt-6 rounded-md border border-dashed bg-muted/30 p-6 text-center text-sm text-muted-foreground">
+          No deliveries logged today.
+        </div>
+      </div>
+    );
+  }
+
+  // Batch-resolve store + distributor names in two round-trips.
+  const storeIds = Array.from(new Set(deliveries.map((d: any) => d.store_id).filter(Boolean)));
+  const distIds = Array.from(new Set(deliveries.map((d: any) => d.distributor_id).filter(Boolean)));
+
+  const [storesRes, distsRes] = await Promise.all([
+    storeIds.length > 0
+      ? admin.from("stores").select("id, name").in("id", storeIds as string[])
+      : Promise.resolve({ data: [] as Array<{ id: string; name: string | null }> }),
+    distIds.length > 0
+      ? admin.from("profiles").select("id, full_name").in("id", distIds as string[])
+      : Promise.resolve({ data: [] as Array<{ id: string; full_name: string | null }> }),
+  ]);
+
+  const storeMap = new Map(
+    ((storesRes.data ?? []) as Array<{ id: string; name: string | null }>).map(
+      (s) => [s.id, s.name ?? "(unnamed store)"],
+    ),
+  );
+  const distMap = new Map(
+    ((distsRes.data ?? []) as Array<{ id: string; full_name: string | null }>).map(
+      (p) => [p.id, p.full_name ?? "(unnamed distributor)"],
+    ),
+  );
+
+  return (
+    <div className="rounded-xl border bg-card p-6">
+      <div className="mb-1 flex items-center justify-between">
+        <div>
+          <div className="text-base font-semibold text-foreground">Recent Deliveries</div>
+          <p className="text-xs text-muted-foreground">Today, across all distributors</p>
+        </div>
+      </div>
+      <div className="mt-4 overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead className="text-xs uppercase text-muted-foreground">
+            <tr>
+              <th className="px-2 py-2 text-left font-medium">Time</th>
+              <th className="px-2 py-2 text-left font-medium">Distributor</th>
+              <th className="px-2 py-2 text-left font-medium">Store</th>
+              <th className="px-2 py-2 text-right font-medium">Items</th>
+              <th className="px-2 py-2 text-right font-medium">Amount</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y">
+            {deliveries.map((d: any) => (
+              <tr key={d.id}>
+                <td className="px-2 py-2 text-muted-foreground">
+                  {new Date(d.created_at).toLocaleTimeString("en-IN", {
+                    timeZone: "Asia/Kolkata",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    hour12: true,
+                  })}
+                </td>
+                <td className="px-2 py-2 font-medium">
+                  {distMap.get(d.distributor_id) ?? "—"}
+                </td>
+                <td className="px-2 py-2">{storeMap.get(d.store_id) ?? "—"}</td>
+                <td className="px-2 py-2 text-right tabular-nums">{d.item_count ?? 0}</td>
+                <td className="px-2 py-2 text-right font-semibold tabular-nums text-emerald-700">
+                  {formatInr(Number(d.total_value ?? 0))}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 
@@ -212,6 +324,21 @@ export default async function DashboardPage() {
           <RevenueMTD role={role} />
         </Suspense>
       </div>
+
+      {/* ── Recent Deliveries — live, today's data ─────────────────────────── */}
+      <Suspense
+        fallback={
+          <div className="rounded-xl border bg-card p-6">
+            <div className="mb-1 text-base font-semibold text-foreground">
+              Recent Deliveries
+            </div>
+            <p className="text-xs text-muted-foreground">Today, across all distributors</p>
+            <div className="mt-6 h-32 animate-pulse rounded-md bg-muted/30" />
+          </div>
+        }
+      >
+        <RecentDeliveriesPanel />
+      </Suspense>
 
       {/* ── Placeholder for charts ─────────────────────────────────────────── */}
       <div className="grid gap-4 lg:grid-cols-5">

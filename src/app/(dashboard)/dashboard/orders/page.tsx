@@ -11,7 +11,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { ChevronRight, Search } from "lucide-react";
+import { ChevronRight, Plus, Search } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { getOrders } from "../../orders/actions";
 import { formatInr, formatIstDate } from "../../ss/_lib/format";
@@ -46,6 +46,9 @@ export default async function OrdersPage({ searchParams }: PageProps) {
     .eq("id", authData.user.id)
     .single();
   const role = (profile as { role?: string } | null)?.role ?? "";
+  // Super Admin + Sales Person may place orders on behalf of a distributor
+  // from the dashboard. Anyone else just sees the list.
+  const canPlaceOrder = role === "super_admin" || role === "sales_person";
 
   const statusFilter = (searchParams?.status as Status) ?? "all";
   const dateFilter = searchParams?.date ?? "";
@@ -94,6 +97,15 @@ export default async function OrdersPage({ searchParams }: PageProps) {
             </span>
             <span className="ml-2 font-semibold tabular-nums">{formatInr(totalValue)}</span>
           </div>
+          {canPlaceOrder && (
+            <Link
+              href="/dashboard/orders/new"
+              className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+            >
+              <Plus className="h-4 w-4" />
+              New order
+            </Link>
+          )}
         </div>
       </header>
 

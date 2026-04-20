@@ -46,7 +46,10 @@ export type UserRole =
   | "super_admin"
   | "super_stockist" // stored as "sales_supervisor" in the DB enum
   | "sales_person"
-  | "distributor";
+  | "distributor"
+  // Narrow factory-gate role: sees only /dashboard/dispatch and its sole
+  // action is marking orders as picked up when distributors collect stock.
+  | "dispatch_manager";
 
 // ---------------------------------------------------------------------------
 // Route protection table
@@ -68,6 +71,13 @@ const ROUTE_RULES: Array<{
     pattern: /^\/dashboard\/ss(\/.*)?$/,
     allowedRoles: ["super_stockist"] as const,
   },
+  // /dashboard/dispatch/* — Dispatch Manager (+ Super Admin fallback).
+  // MUST appear before the general /dashboard/* rule so the narrower
+  // allow-list wins for this path.
+  {
+    pattern: /^\/dashboard\/dispatch(\/.*)?$/,
+    allowedRoles: ["dispatch_manager", "super_admin"] as const,
+  },
   // /dashboard/* (general) — all staff roles
   {
     pattern: /^\/dashboard(\/.*)?$/,
@@ -86,6 +96,9 @@ const ROLE_HOME: Record<UserRole, string> = {
   super_stockist: "/dashboard",
   sales_person: "/dashboard",
   distributor: "/app",
+  // Dispatch Managers land directly on their pickup queue — it's the only
+  // screen they need.
+  dispatch_manager: "/dashboard/dispatch",
 };
 
 // ---------------------------------------------------------------------------

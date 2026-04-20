@@ -42,6 +42,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { MultiSelect } from "@/components/ui/multi-select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -50,7 +51,7 @@ import {
   deactivateUser,
   activateUser,
   startImpersonation,
-  getAreasForZone,
+  getAreasForZones,
   type UserRow,
   type AppRole,
 } from "../actions";
@@ -72,6 +73,7 @@ const ROLE_LABELS: Record<AppRole, string> = {
   super_stockist: "Super Stockist",
   distributor: "Distributor",
   sales_person: "Sales Person",
+  dispatch_manager: "Dispatch Manager",
 };
 
 const ROLE_BADGE_STYLES: Record<AppRole, string> = {
@@ -83,6 +85,8 @@ const ROLE_BADGE_STYLES: Record<AppRole, string> = {
     "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300",
   sales_person:
     "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
+  dispatch_manager:
+    "bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300",
 };
 
 function generatePassword(length = 12): string {
@@ -112,36 +116,46 @@ function AddUserModal({ open, onClose, zones, onSuccess }: AddUserModalProps) {
   const [role, setRole] = useState<AppRole | "">("");
   const [password, setPassword] = useState("");
   const [showPw, setShowPw] = useState(false);
-  const [zoneId, setZoneId] = useState("");
-  const [areaId, setAreaId] = useState("");
-  const [areas, setAreas] = useState<{ id: string; name: string }[]>([]);
+  const [zoneIds, setZoneIds] = useState<string[]>([]);
+  const [areaIds, setAreaIds] = useState<string[]>([]);
+  const [areas, setAreas] = useState<{ id: string; name: string; zone_id: string }[]>([]);
   const [areasLoading, setAreasLoading] = useState(false);
 
   // Roles that need zone/area
   const needsZone = role === "super_stockist" || role === "distributor" || role === "sales_person";
   const needsArea = role === "distributor" || role === "sales_person";
 
-  // Load areas when zone changes
+  // Re-fetch the area candidate list whenever the set of selected zones changes.
+  // Areas whose parent zone was deselected fall out of the list — the
+  // MultiSelect prunes those from the selected `areaIds` on its own.
   useEffect(() => {
-    if (!zoneId) { setAreas([]); setAreaId(""); return; }
+    if (zoneIds.length === 0) {
+      setAreas([]);
+      setAreaIds([]);
+      return;
+    }
+    let cancelled = false;
     setAreasLoading(true);
-    setAreaId("");
-    getAreasForZone(zoneId).then((data) => {
+    getAreasForZones(zoneIds).then((data) => {
+      if (cancelled) return;
       setAreas(data);
       setAreasLoading(false);
     });
-  }, [zoneId]);
+    return () => {
+      cancelled = true;
+    };
+  }, [zoneIds]);
 
-  // Reset when role changes
+  // Reset scoping when role changes
   useEffect(() => {
-    setZoneId("");
-    setAreaId("");
+    setZoneIds([]);
+    setAreaIds([]);
     setAreas([]);
   }, [role]);
 
   function reset() {
     setFullName(""); setPhone(""); setRole(""); setPassword("");
-    setShowPw(false); setZoneId(""); setAreaId(""); setAreas([]);
+    setShowPw(false); setZoneIds([]); setAreaIds([]); setAreas([]);
   }
 
   function handleClose() { reset(); onClose(); }
@@ -153,8 +167,9 @@ function AddUserModal({ open, onClose, zones, onSuccess }: AddUserModalProps) {
     fd.set("phone", phone);
     fd.set("role", role);
     fd.set("password", password);
-    if (zoneId) fd.set("zone_id", zoneId);
-    if (areaId) fd.set("area_id", areaId);
+    // Multi-select values go as repeated `zone_ids` / `area_ids` entries.
+    zoneIds.forEach((z) => fd.append("zone_ids", z));
+    areaIds.forEach((a) => fd.append("area_ids", a));
 
     startTransition(async () => {
       const result = await createUser(fd);
@@ -163,16 +178,22 @@ function AddUserModal({ open, onClose, zones, onSuccess }: AddUserModalProps) {
         return;
       }
       toast({ title: "User created", description: `${fullName} has been added.` });
-      // Build partial UserRow for optimistic update
+
+      // Build optimistic UserRow. `zones[]` / `areas[]` carry the full set;
+      // the legacy singular fields mirror the first element for back-compat.
+      const selectedZones = zones.filter((z) => zoneIds.includes(z.id));
+      const selectedAreas = areas.filter((a) => areaIds.includes(a.id));
       onSuccess({
         id: result.data!.id,
         full_name: fullName,
         phone,
         role: role as AppRole,
-        zone_id: zoneId || null,
-        zone_name: zones.find((z) => z.id === zoneId)?.name ?? null,
-        area_id: areaId || null,
-        area_name: areas.find((a) => a.id === areaId)?.name ?? null,
+        zone_id: zoneIds[0] ?? null,
+        zone_name: selectedZones[0]?.name ?? null,
+        area_id: areaIds[0] ?? null,
+        area_name: selectedAreas[0]?.name ?? null,
+        zones: selectedZones.map((z) => ({ id: z.id, name: z.name })),
+        areas: selectedAreas.map((a) => ({ id: a.id, name: a.name })),
         is_active: true,
         created_at: new Date().toISOString(),
       });
@@ -227,59 +248,44 @@ function AddUserModal({ open, onClose, zones, onSuccess }: AddUserModalProps) {
                 <SelectItem value="super_stockist">Super Stockist</SelectItem>
                 <SelectItem value="distributor">Distributor</SelectItem>
                 <SelectItem value="sales_person">Sales Person</SelectItem>
+                <SelectItem value="dispatch_manager">Dispatch Manager</SelectItem>
               </SelectContent>
             </Select>
           </div>
 
-          {/* Zone (conditional) */}
+          {/* Zones (multi-select, conditional) */}
           {needsZone && (
             <div className="space-y-1.5">
-              <Label htmlFor="au-zone">Zone</Label>
-              <Select value={zoneId} onValueChange={setZoneId}>
-                <SelectTrigger id="au-zone">
-                  <SelectValue placeholder="Select zone…" />
-                </SelectTrigger>
-                <SelectContent>
-                  {zones.map((z) => (
-                    <SelectItem key={z.id} value={z.id}>
-                      {z.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Label htmlFor="au-zones">Zone(s)</Label>
+              <MultiSelect
+                id="au-zones"
+                options={zones.map((z) => ({ value: z.id, label: z.name }))}
+                value={zoneIds}
+                onChange={setZoneIds}
+                placeholder="Select one or more zones…"
+              />
             </div>
           )}
 
-          {/* Area (conditional) */}
+          {/* Areas (multi-select, conditional — filtered by selected zones) */}
           {needsArea && (
             <div className="space-y-1.5">
-              <Label htmlFor="au-area">Area</Label>
-              <Select
-                value={areaId}
-                onValueChange={setAreaId}
-                disabled={!zoneId || areasLoading}
-              >
-                <SelectTrigger id="au-area">
-                  <SelectValue
-                    placeholder={
-                      !zoneId
-                        ? "Select a zone first"
-                        : areasLoading
-                        ? "Loading…"
-                        : areas.length === 0
-                        ? "No areas in this zone"
-                        : "Select area…"
-                    }
-                  />
-                </SelectTrigger>
-                <SelectContent>
-                  {areas.map((a) => (
-                    <SelectItem key={a.id} value={a.id}>
-                      {a.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Label htmlFor="au-areas">Area(s)</Label>
+              <MultiSelect
+                id="au-areas"
+                options={areas.map((a) => ({ value: a.id, label: a.name }))}
+                value={areaIds}
+                onChange={setAreaIds}
+                disabled={zoneIds.length === 0}
+                loading={areasLoading}
+                placeholder={
+                  zoneIds.length === 0
+                    ? "Select a zone first"
+                    : areas.length === 0
+                    ? "No areas in the selected zone(s)"
+                    : "Select one or more areas…"
+                }
+              />
             </div>
           )}
 
@@ -366,59 +372,89 @@ function EditUserModal({ user, zones, onClose, onSuccess }: EditUserModalProps) 
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
   const [role, setRole] = useState<AppRole | "">("");
-  const [zoneId, setZoneId] = useState("");
-  const [areaId, setAreaId] = useState("");
-  const [areas, setAreas] = useState<{ id: string; name: string }[]>([]);
+  const [zoneIds, setZoneIds] = useState<string[]>([]);
+  const [areaIds, setAreaIds] = useState<string[]>([]);
+  const [areas, setAreas] = useState<{ id: string; name: string; zone_id: string }[]>([]);
   const [areasLoading, setAreasLoading] = useState(false);
 
-  // Remember the user's original zone id so we know whether a zone-change
-  // side-effect should clear the pre-filled area.
-  const [initialZoneId, setInitialZoneId] = useState<string>("");
+  // Track the initial zone set so that the first effect cycle (right after
+  // seeding form state) doesn't wipe the pre-filled areas. We only clear
+  // areas when the user *actually* edits the zone selection.
+  const [initialZoneIds, setInitialZoneIds] = useState<string[]>([]);
 
   const needsZone =
     role === "super_stockist" || role === "distributor" || role === "sales_person";
   const needsArea = role === "distributor" || role === "sales_person";
 
   // Seed form state whenever the target user changes (i.e. the modal opens).
+  // Prefer the new arrays; fall back to the legacy singular ids for users who
+  // were created before the multi-zone migration ran.
   useEffect(() => {
     if (!user) return;
     setFullName(user.full_name ?? "");
     setPhone(user.phone ?? "");
     setRole(user.role);
-    setZoneId(user.zone_id ?? "");
-    setAreaId(user.area_id ?? "");
-    setInitialZoneId(user.zone_id ?? "");
+    const seedZones = user.zones?.length
+      ? user.zones.map((z) => z.id)
+      : user.zone_id
+      ? [user.zone_id]
+      : [];
+    const seedAreas = user.areas?.length
+      ? user.areas.map((a) => a.id)
+      : user.area_id
+      ? [user.area_id]
+      : [];
+    setZoneIds(seedZones);
+    setAreaIds(seedAreas);
+    setInitialZoneIds(seedZones);
     setAreas([]);
   }, [user]);
 
-  // Load areas when zone changes. We *don't* wipe areaId when the zone matches
-  // the initial load, so the pre-filled area survives the first render.
+  // Re-load the area candidate list whenever the zone selection changes.
+  // We preserve the seeded `areaIds` on the very first cycle (when zoneIds
+  // still equals initialZoneIds) so the user's existing areas don't blank
+  // out before the dropdown has a chance to show them as ticked.
   useEffect(() => {
-    if (!zoneId) {
+    if (zoneIds.length === 0) {
       setAreas([]);
-      setAreaId("");
+      setAreaIds([]);
       return;
     }
+    let cancelled = false;
     setAreasLoading(true);
-    if (zoneId !== initialZoneId) {
-      setAreaId("");
+    const isInitialCycle =
+      zoneIds.length === initialZoneIds.length &&
+      zoneIds.every((z) => initialZoneIds.includes(z));
+    if (!isInitialCycle) {
+      // Zone set was edited — drop any selected areas that no longer have a
+      // valid parent. The MultiSelect prunes invalid IDs once the new options
+      // arrive, but doing it eagerly here avoids a brief flash.
+      // (Concrete pruning happens once `areas` resolves below.)
     }
-    getAreasForZone(zoneId).then((data) => {
+    getAreasForZones(zoneIds).then((data) => {
+      if (cancelled) return;
       setAreas(data);
+      if (!isInitialCycle) {
+        const validIds = new Set(data.map((a) => a.id));
+        setAreaIds((prev) => prev.filter((id) => validIds.has(id)));
+      }
       setAreasLoading(false);
     });
-  }, [zoneId, initialZoneId]);
+    return () => {
+      cancelled = true;
+    };
+  }, [zoneIds, initialZoneIds]);
 
   // If role changes to one that doesn't need zone/area, clear them so the
-  // server action writes NULLs.
+  // server action writes empty assignments and the legacy columns get NULL.
   useEffect(() => {
     if (!needsZone) {
-      setZoneId("");
-      setAreaId("");
+      setZoneIds([]);
+      setAreaIds([]);
       setAreas([]);
     }
     if (needsZone && !needsArea) {
-      setAreaId("");
+      setAreaIds([]);
     }
   }, [role, needsZone, needsArea]);
 
@@ -429,8 +465,8 @@ function EditUserModal({ user, zones, onClose, onSuccess }: EditUserModalProps) 
     fd.set("full_name", fullName);
     fd.set("phone", phone);
     fd.set("role", role);
-    if (zoneId) fd.set("zone_id", zoneId);
-    if (areaId) fd.set("area_id", areaId);
+    zoneIds.forEach((z) => fd.append("zone_ids", z));
+    areaIds.forEach((a) => fd.append("area_ids", a));
 
     startTransition(async () => {
       const result = await updateUser(user.id, fd);
@@ -442,15 +478,19 @@ function EditUserModal({ user, zones, onClose, onSuccess }: EditUserModalProps) 
 
       // Prefer the server-returned row (joined zone/area names). Fall back to a
       // locally-built row when the refresh step failed but the update didn't.
+      const selectedZones = zones.filter((z) => zoneIds.includes(z.id));
+      const selectedAreas = areas.filter((a) => areaIds.includes(a.id));
       const updated: UserRow = result.data ?? {
         ...user,
         full_name: fullName,
         phone,
         role: role as AppRole,
-        zone_id: zoneId || null,
-        zone_name: zones.find((z) => z.id === zoneId)?.name ?? null,
-        area_id: areaId || null,
-        area_name: areas.find((a) => a.id === areaId)?.name ?? null,
+        zone_id: zoneIds[0] ?? null,
+        zone_name: selectedZones[0]?.name ?? null,
+        area_id: areaIds[0] ?? null,
+        area_name: selectedAreas[0]?.name ?? null,
+        zones: selectedZones.map((z) => ({ id: z.id, name: z.name })),
+        areas: selectedAreas.map((a) => ({ id: a.id, name: a.name })),
       };
       onSuccess(updated);
       onClose();
@@ -507,59 +547,44 @@ function EditUserModal({ user, zones, onClose, onSuccess }: EditUserModalProps) 
                 <SelectItem value="super_stockist">Super Stockist</SelectItem>
                 <SelectItem value="distributor">Distributor</SelectItem>
                 <SelectItem value="sales_person">Sales Person</SelectItem>
+                <SelectItem value="dispatch_manager">Dispatch Manager</SelectItem>
               </SelectContent>
             </Select>
           </div>
 
-          {/* Zone (conditional) */}
+          {/* Zones (multi-select, conditional) */}
           {needsZone && (
             <div className="space-y-1.5">
-              <Label htmlFor="eu-zone">Zone</Label>
-              <Select value={zoneId} onValueChange={setZoneId}>
-                <SelectTrigger id="eu-zone">
-                  <SelectValue placeholder="Select zone…" />
-                </SelectTrigger>
-                <SelectContent>
-                  {zones.map((z) => (
-                    <SelectItem key={z.id} value={z.id}>
-                      {z.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Label htmlFor="eu-zones">Zone(s)</Label>
+              <MultiSelect
+                id="eu-zones"
+                options={zones.map((z) => ({ value: z.id, label: z.name }))}
+                value={zoneIds}
+                onChange={setZoneIds}
+                placeholder="Select one or more zones…"
+              />
             </div>
           )}
 
-          {/* Area (conditional) */}
+          {/* Areas (multi-select, conditional — filtered by selected zones) */}
           {needsArea && (
             <div className="space-y-1.5">
-              <Label htmlFor="eu-area">Area</Label>
-              <Select
-                value={areaId}
-                onValueChange={setAreaId}
-                disabled={!zoneId || areasLoading}
-              >
-                <SelectTrigger id="eu-area">
-                  <SelectValue
-                    placeholder={
-                      !zoneId
-                        ? "Select a zone first"
-                        : areasLoading
-                        ? "Loading…"
-                        : areas.length === 0
-                        ? "No areas in this zone"
-                        : "Select area…"
-                    }
-                  />
-                </SelectTrigger>
-                <SelectContent>
-                  {areas.map((a) => (
-                    <SelectItem key={a.id} value={a.id}>
-                      {a.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Label htmlFor="eu-areas">Area(s)</Label>
+              <MultiSelect
+                id="eu-areas"
+                options={areas.map((a) => ({ value: a.id, label: a.name }))}
+                value={areaIds}
+                onChange={setAreaIds}
+                disabled={zoneIds.length === 0}
+                loading={areasLoading}
+                placeholder={
+                  zoneIds.length === 0
+                    ? "Select a zone first"
+                    : areas.length === 0
+                    ? "No areas in the selected zone(s)"
+                    : "Select one or more areas…"
+                }
+              />
             </div>
           )}
 
@@ -852,7 +877,20 @@ function UserRow({
     setActivating(false);
   }
 
-  const zoneLine = [user.zone_name, user.area_name]
+  // Build a "Zone(s) / Area(s)" display line from the junction-table arrays.
+  // Fall back to the legacy singular fields for users that predate the
+  // migration (which would only be the case if the backfill hasn't run yet).
+  const zoneNames = user.zones?.length
+    ? user.zones.map((z) => z.name)
+    : user.zone_name
+    ? [user.zone_name]
+    : [];
+  const areaNames = user.areas?.length
+    ? user.areas.map((a) => a.name)
+    : user.area_name
+    ? [user.area_name]
+    : [];
+  const zoneLine = [zoneNames.join(", "), areaNames.join(", ")]
     .filter(Boolean)
     .join(" / ");
 

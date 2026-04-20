@@ -28,6 +28,7 @@ import {
   X,
   GitBranch,
   CreditCard,
+  Truck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { UserRole } from "@/middleware";
@@ -108,6 +109,14 @@ const NAV_ITEMS: NavItem[] = [
     roles: ["super_admin", "super_stockist"],
     section: "OPERATIONS",
   },
+  {
+    href: "/dashboard/dispatch",
+    label: "Dispatch",
+    icon: Truck,
+    // Dispatch Manager's single screen; Super Admin sees it too for fallback.
+    roles: ["super_admin", "dispatch_manager"],
+    section: "OPERATIONS",
+  },
 
   // ── FINANCE ───────────────────────────────────────────────────────────────
   {
@@ -145,6 +154,7 @@ const ROLE_LABELS: Record<UserRole, string> = {
   super_stockist: "Super Stockist",
   sales_person: "Sales Person",
   distributor: "Distributor",
+  dispatch_manager: "Dispatch Manager",
 };
 
 // ─── Role initials + color ───────────────────────────────────────────────────
@@ -154,6 +164,7 @@ const ROLE_AVATARS: Record<string, { initials: string; bg: string }> = {
   super_stockist: { initials: "SS", bg: "bg-amber-700" },
   sales_person: { initials: "SP", bg: "bg-sky-700" },
   distributor: { initials: "D", bg: "bg-violet-700" },
+  dispatch_manager: { initials: "DM", bg: "bg-rose-700" },
 };
 
 // ─── Props ────────────────────────────────────────────────────────────────────

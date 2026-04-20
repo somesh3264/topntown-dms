@@ -7,11 +7,18 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, PackageCheck } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
-import { getOrderDetail } from "../../../orders/actions";
+import {
+  getOrderDetail,
+  getOrderFormContext,
+} from "../../../orders/actions";
+import { isOrderEditableByAdmin } from "../../../orders/status";
 import { formatInr, formatIstDate, formatIstDateTime } from "../../../ss/_lib/format";
 import GenerateBillButton from "./_components/GenerateBillButton";
+import BillCard from "./_components/BillCard";
+import OrderItemsSection from "./_components/OrderItemsSection";
+import MarkPickedUpButton from "./_components/MarkPickedUpButton";
 
 export const metadata: Metadata = { title: "Order Detail" };
 export const dynamic = "force-dynamic";
@@ -32,11 +39,21 @@ export default async function OrderDetailPage({ params }: PageProps) {
     .single();
   const role = (profile as { role?: string } | null)?.role ?? "";
   const canGenerateBill = role === "super_admin";
+  // Super admin and sales person can edit order line items from the dashboard.
+  // (The server action re-checks the role — this gate is purely for UI.)
+  const canEditItems = role === "super_admin" || role === "sales_person";
+  // Only super_admin retains pickup capability on this screen; dispatch_manager
+  // does it from /dashboard/dispatch. Sales person no longer marks pickup —
+  // that moved to the factory-gate role.
+  const canMarkPickup = role === "super_admin";
 
   const order = await getOrderDetail(params.orderId);
   if (!order) notFound();
 
-  const subTotal = order.items.reduce((a, i) => a + i.line_total, 0);
+  // Only load the product catalog when the viewer is actually allowed to
+  // edit — saves a DB round-trip for distributors and SS viewing their own
+  // orders. getOrderFormContext also enforces the role check server-side.
+  const orderFormContext = canEditItems ? await getOrderFormContext() : null;
 
   return (
     <div className="p-6">
@@ -88,58 +105,57 @@ export default async function OrderDetailPage({ params }: PageProps) {
             {canGenerateBill && order.status === "confirmed" && (
               <GenerateBillButton orderId={order.id} />
             )}
-            {canGenerateBill && order.status === "billed" && (
-              <span className="text-xs text-muted-foreground">Already billed</span>
+
+            {/* Mark-as-picked-up action. Visible to super_admin + sales_person
+                while the order is still in the editable window. Once clicked,
+                status flips to 'dispatched', the timestamp is captured, and
+                the edit-items flow across the whole page auto-locks via
+                isOrderEditableByAdmin. */}
+            {canMarkPickup && isOrderEditableByAdmin(order.status) && (
+              <MarkPickedUpButton orderId={order.id} />
+            )}
+
+            {/* Post-pickup readout: once dispatched, show when + by whom. */}
+            {order.picked_up_at && (
+              <div className="flex items-center gap-1.5 rounded-md border bg-muted/40 px-2.5 py-1 text-xs text-muted-foreground">
+                <PackageCheck className="h-3.5 w-3.5 text-emerald-600" />
+                <span>
+                  Picked up{" "}
+                  <span className="text-foreground">
+                    {formatIstDateTime(order.picked_up_at)}
+                  </span>
+                  {order.picked_up_by_name && (
+                    <> · by {order.picked_up_by_name}</>
+                  )}
+                </span>
+              </div>
             )}
           </div>
         </div>
       </header>
 
-      <section className="rounded-lg border bg-card">
-        <div className="flex items-center justify-between border-b px-4 py-3">
-          <h2 className="text-sm font-medium">Line items</h2>
-          <span className="text-xs text-muted-foreground">
-            {order.items.length} item{order.items.length === 1 ? "" : "s"}
-          </span>
-        </div>
+      {/* ── Bill card — shown once the order is billed ───────────────────── */}
+      {order.status === "billed" && order.bill && (
+        <BillCard bill={order.bill} canRetryPdf={canGenerateBill} />
+      )}
 
-        {order.items.length === 0 ? (
-          <div className="p-8 text-center text-sm text-muted-foreground">
-            This order has no line items.
-          </div>
-        ) : (
-          <table className="w-full text-sm">
-            <thead className="bg-muted/30 text-xs uppercase text-muted-foreground">
-              <tr>
-                <th className="px-4 py-2 text-left font-medium">Product</th>
-                <th className="px-4 py-2 text-right font-medium">Qty</th>
-                <th className="px-4 py-2 text-right font-medium">Unit price</th>
-                <th className="px-4 py-2 text-right font-medium">Line total</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y">
-              {order.items.map((it) => (
-                <tr key={it.id}>
-                  <td className="px-4 py-2">{it.product_name ?? "(unknown)"}</td>
-                  <td className="px-4 py-2 text-right tabular-nums">{it.quantity}</td>
-                  <td className="px-4 py-2 text-right tabular-nums">{formatInr(it.unit_price)}</td>
-                  <td className="px-4 py-2 text-right font-medium tabular-nums">
-                    {formatInr(it.line_total)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr className="border-t bg-muted/30 font-medium">
-                <td className="px-4 py-2 text-right" colSpan={3}>
-                  Sub-total
-                </td>
-                <td className="px-4 py-2 text-right tabular-nums">{formatInr(subTotal)}</td>
-              </tr>
-            </tfoot>
-          </table>
-        )}
-      </section>
+      {/* Fallback: order marked billed but bill row not found (stale cache,
+          partial generation). Keeps the UX honest rather than silently
+          hiding the state. */}
+      {order.status === "billed" && !order.bill && (
+        <section className="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200">
+          This order is marked as billed, but the bill record could not be
+          located. Refresh in a moment; if the issue persists, contact support.
+        </section>
+      )}
+
+      <OrderItemsSection
+        orderId={order.id}
+        orderStatus={order.status}
+        initialItems={order.items}
+        canEdit={canEditItems}
+        products={orderFormContext?.products}
+      />
     </div>
   );
 }
