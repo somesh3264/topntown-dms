@@ -5,20 +5,29 @@
 //   exportToExcel(filename, sheetName, columns, rows, summary?)
 //   exportToPDF(filename, title, columns, rows, summary?)
 //
-// Library expectations (add to package.json):
-//   "xlsx":             "^0.18.5",
-//   "jspdf":            "^2.5.1",
-//   "jspdf-autotable":  "^3.8.2"
+// Implementation notes
+// --------------------
+// The original implementation depended on the `xlsx`, `jspdf`, and
+// `jspdf-autotable` packages. Those packages are declared in package.json
+// but never installed into node_modules in our current environment, which
+// caused the Reports tab to crash at import time with
+//     Cannot find module 'xlsx' …
 //
+// To keep the Reports module fully functional without the heavy binary
+// dependencies we now render:
+//   • Excel export  → a CSV file (download; Excel/Sheets open CSVs natively).
+//                     CSV is a lowest-common-denominator format that works
+//                     across every target the client uses.
+//   • PDF export    → a print-ready HTML window. The browser's built-in
+//                     "Save as PDF" option produces a proper PDF and lets
+//                     users pick page size / orientation per their printer.
+//
+// Public API (ExportColumn / ExportSummaryItem / exportToExcel / exportToPDF /
+// inr / pct) is preserved so the per-tab exporters keep working unchanged.
 // All exports run entirely in the browser — no data leaves the client.
 // ---------------------------------------------------------------------------
 
 "use client";
-
-// deno-lint-ignore no-explicit-any — libraries ship partial types.
-import * as XLSX from "xlsx";
-import { jsPDF } from "jspdf";
-import autoTable from "jspdf-autotable";
 
 export interface ExportColumn<T> {
   header: string;
@@ -34,7 +43,7 @@ export interface ExportSummaryItem {
   value: string | number;
 }
 
-// ─── Excel ───────────────────────────────────────────────────────────────────
+// ─── Excel (CSV) ─────────────────────────────────────────────────────────────
 
 export function exportToExcel<T>(
   filename: string,
@@ -43,38 +52,39 @@ export function exportToExcel<T>(
   rows: T[],
   summary?: ExportSummaryItem[],
 ): void {
-  const header = columns.map((c) => c.header);
+  // `sheetName` is no longer a workbook sheet — it's kept only for API
+  // compatibility. The file is a single CSV.
+  void sheetName;
 
-  const body = rows.map((r) =>
-    columns.map((c) => {
-      const raw = (r as Record<string, unknown>)[c.key];
-      if (c.format) return c.format(raw, r);
-      // Keep numbers as numbers so Excel treats them as numeric.
-      if (typeof raw === "number") return raw;
-      if (raw === null || raw === undefined) return "";
-      return String(raw);
-    }),
-  );
+  const lines: string[] = [];
+  lines.push(columns.map((c) => csvCell(c.header)).join(","));
 
-  const aoa: (string | number)[][] = [header, ...body];
-
-  if (summary && summary.length > 0) {
-    aoa.push([]);
-    aoa.push(["Summary"]);
-    summary.forEach((s) => {
-      aoa.push([s.label, typeof s.value === "number" ? s.value : String(s.value)]);
-    });
+  for (const r of rows) {
+    lines.push(
+      columns
+        .map((c) => {
+          const raw = (r as Record<string, unknown>)[c.key];
+          const v = c.format ? c.format(raw, r) : raw;
+          return csvCell(v);
+        })
+        .join(","),
+    );
   }
 
-  const ws = XLSX.utils.aoa_to_sheet(aoa);
-  // Reasonable column widths.
-  ws["!cols"] = columns.map((c) => ({ wch: Math.max(c.header.length + 2, 14) }));
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, sheetName.slice(0, 31));
-  XLSX.writeFile(wb, ensureExt(filename, ".xlsx"));
+  if (summary && summary.length > 0) {
+    lines.push("");
+    lines.push(csvCell("Summary"));
+    for (const s of summary) {
+      lines.push([csvCell(s.label), csvCell(s.value)].join(","));
+    }
+  }
+
+  // BOM so Excel on Windows auto-detects UTF-8 for rupee/accented chars.
+  const csv = "\uFEFF" + lines.join("\r\n");
+  downloadBlob(new Blob([csv], { type: "text/csv;charset=utf-8" }), ensureExt(filename, ".csv"));
 }
 
-// ─── PDF ─────────────────────────────────────────────────────────────────────
+// ─── PDF (browser print) ─────────────────────────────────────────────────────
 
 export function exportToPDF<T>(
   filename: string,
@@ -83,90 +93,239 @@ export function exportToPDF<T>(
   rows: T[],
   summary?: ExportSummaryItem[],
 ): void {
-  const doc = new jsPDF({ unit: "pt", format: "a4", orientation: "landscape" });
-  const margin = 36;
-  const pageWidth = doc.internal.pageSize.getWidth();
+  const html = buildPrintHtml(filename, title, columns, rows, summary);
 
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(14);
-  doc.text("TOP N TOWN", margin, 40);
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(10);
-  doc.setTextColor(90);
-  doc.text(title, margin, 56);
-  doc.text(
-    `Generated: ${new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })} IST`,
-    pageWidth - margin,
-    56,
-    { align: "right" },
-  );
-  doc.setTextColor(0);
-
-  const head = [columns.map((c) => c.header)];
-  const body = rows.map((r) =>
-    columns.map((c) => {
-      const raw = (r as Record<string, unknown>)[c.key];
-      if (c.format) return String(c.format(raw, r));
-      if (raw === null || raw === undefined) return "";
-      return String(raw);
-    }),
-  );
-
-  autoTable(doc, {
-    startY: 76,
-    head,
-    body,
-    margin: { left: margin, right: margin },
-    styles: { fontSize: 8, cellPadding: 4 },
-    headStyles: {
-      fillColor: [33, 37, 41],
-      textColor: 255,
-      fontStyle: "bold",
-      halign: "center",
-    },
-    alternateRowStyles: { fillColor: [247, 249, 251] },
-    columnStyles: Object.fromEntries(
-      columns.map((c, i) => [i, { halign: c.align ?? "left" }]),
-    ),
-    didDrawPage: () => {
-      const pageHeight = doc.internal.pageSize.getHeight();
-      doc.setFont("helvetica", "italic");
-      doc.setFontSize(8);
-      doc.setTextColor(130);
-      doc.text(
-        "System-generated report • Top N Town DMS",
-        pageWidth / 2,
-        pageHeight - 18,
-        { align: "center" },
-      );
-      doc.setTextColor(0);
-    },
-  });
-
-  if (summary && summary.length > 0) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const afterTableY = (doc as any).lastAutoTable?.finalY ?? 100;
-    let y = afterTableY + 20;
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(10);
-    doc.text("Summary", margin, y);
-    y += 14;
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(9);
-    summary.forEach((s) => {
-      doc.text(s.label, margin, y);
-      doc.text(String(s.value), margin + 200, y);
-      y += 12;
+  // Prefer a new window; fall back to a hidden iframe if popups are blocked.
+  const win = window.open("", "_blank", "noopener,noreferrer,width=1100,height=800");
+  if (win) {
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
+    // Give the browser a tick to lay out, then trigger print.
+    win.addEventListener("load", () => {
+      try {
+        win.focus();
+        win.print();
+      } catch {
+        /* user can still Ctrl+P */
+      }
     });
+    // Safety net if the load event already fired.
+    setTimeout(() => {
+      try {
+        win.focus();
+        win.print();
+      } catch {
+        /* ignore */
+      }
+    }, 400);
+    return;
   }
 
-  doc.save(ensureExt(filename, ".pdf"));
+  // Popup blocked — fall back to a hidden iframe.
+  const iframe = document.createElement("iframe");
+  iframe.style.position = "fixed";
+  iframe.style.right = "0";
+  iframe.style.bottom = "0";
+  iframe.style.width = "0";
+  iframe.style.height = "0";
+  iframe.style.border = "0";
+  document.body.appendChild(iframe);
+  const doc = iframe.contentDocument;
+  if (!doc) {
+    document.body.removeChild(iframe);
+    return;
+  }
+  doc.open();
+  doc.write(html);
+  doc.close();
+  setTimeout(() => {
+    try {
+      iframe.contentWindow?.focus();
+      iframe.contentWindow?.print();
+    } finally {
+      setTimeout(() => {
+        if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+      }, 1000);
+    }
+  }, 400);
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function ensureExt(name: string, ext: string): string {
   return name.toLowerCase().endsWith(ext) ? name : `${name}${ext}`;
+}
+
+function csvCell(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  const s = typeof value === "number" ? String(value) : String(value);
+  // Quote if the cell contains a comma, quote, CR, or LF. Double up internal quotes.
+  if (/[",\r\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+
+function downloadBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  // Revoke after a short delay to let the browser start the download.
+  setTimeout(() => URL.revokeObjectURL(url), 500);
+}
+
+function escapeHtml(v: unknown): string {
+  const s = v === null || v === undefined ? "" : String(v);
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function buildPrintHtml<T>(
+  filename: string,
+  title: string,
+  columns: ExportColumn<T>[],
+  rows: T[],
+  summary?: ExportSummaryItem[],
+): string {
+  const generated =
+    new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }) + " IST";
+
+  const theadCells = columns
+    .map(
+      (c) =>
+        `<th style="text-align:${c.align ?? "left"}">${escapeHtml(c.header)}</th>`,
+    )
+    .join("");
+
+  const bodyRows =
+    rows.length === 0
+      ? `<tr><td colspan="${columns.length}" class="empty">No data.</td></tr>`
+      : rows
+          .map((r) => {
+            const tds = columns
+              .map((c) => {
+                const raw = (r as Record<string, unknown>)[c.key];
+                const v = c.format ? c.format(raw, r) : raw;
+                return `<td style="text-align:${c.align ?? "left"}">${escapeHtml(v)}</td>`;
+              })
+              .join("");
+            return `<tr>${tds}</tr>`;
+          })
+          .join("");
+
+  const summaryHtml =
+    summary && summary.length > 0
+      ? `<section class="summary">
+          <h2>Summary</h2>
+          <table class="summary-table">
+            <tbody>
+              ${summary
+                .map(
+                  (s) =>
+                    `<tr><th>${escapeHtml(s.label)}</th><td>${escapeHtml(s.value)}</td></tr>`,
+                )
+                .join("")}
+            </tbody>
+          </table>
+        </section>`
+      : "";
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>${escapeHtml(filename)}</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    color: #111;
+    margin: 24px;
+  }
+  header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    border-bottom: 2px solid #111;
+    padding-bottom: 8px;
+    margin-bottom: 16px;
+  }
+  header .brand { font-size: 18px; font-weight: 700; letter-spacing: 0.5px; }
+  header .title { font-size: 13px; color: #333; margin-top: 4px; }
+  header .meta  { font-size: 11px; color: #666; }
+  table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  thead th {
+    background: #212529;
+    color: #fff;
+    text-align: left;
+    padding: 6px 8px;
+    border: 1px solid #212529;
+  }
+  tbody td {
+    border: 1px solid #d9dde2;
+    padding: 5px 8px;
+    vertical-align: top;
+  }
+  tbody tr:nth-child(even) td { background: #f7f9fb; }
+  .empty { text-align: center; color: #777; padding: 20px; }
+  .summary { margin-top: 20px; }
+  .summary h2 { font-size: 13px; margin: 0 0 6px 0; }
+  .summary-table { width: auto; min-width: 260px; }
+  .summary-table th { text-align: left; background: #eef1f4; color: #111; border: 1px solid #d9dde2; }
+  footer {
+    margin-top: 16px;
+    font-size: 10px;
+    color: #888;
+    text-align: center;
+    font-style: italic;
+  }
+  @media print {
+    body { margin: 12mm; }
+    @page { size: A4 landscape; margin: 12mm; }
+    .no-print { display: none !important; }
+    thead { display: table-header-group; }
+    tr, td, th { page-break-inside: avoid; }
+  }
+  .toolbar {
+    margin: 0 0 12px 0;
+    font-size: 12px;
+  }
+  .toolbar button {
+    padding: 6px 12px;
+    font-size: 12px;
+    cursor: pointer;
+    margin-right: 8px;
+  }
+</style>
+</head>
+<body>
+  <div class="toolbar no-print">
+    <button onclick="window.print()">Print / Save as PDF</button>
+    <button onclick="window.close()">Close</button>
+    <span style="color:#666">Tip: choose "Save as PDF" as the destination in the print dialog.</span>
+  </div>
+  <header>
+    <div>
+      <div class="brand">TOP N TOWN</div>
+      <div class="title">${escapeHtml(title)}</div>
+    </div>
+    <div class="meta">Generated: ${escapeHtml(generated)}</div>
+  </header>
+  <table>
+    <thead><tr>${theadCells}</tr></thead>
+    <tbody>${bodyRows}</tbody>
+  </table>
+  ${summaryHtml}
+  <footer>System-generated report • Top N Town DMS</footer>
+</body>
+</html>`;
 }
 
 /** Shared INR formatter for amounts. */

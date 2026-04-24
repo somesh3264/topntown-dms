@@ -77,57 +77,66 @@ export default function BillingClient({
     if (rows.length === 0) return;
     setExporting(true);
     try {
-      // Lazy-import so the page bundle stays small.
-      const XLSX = await import("xlsx");
-
-      const exportRows = rows.map((r) => ({
-        "Bill Date": formatIstDate(r.billDate),
-        Distributor: r.distributor,
-        "Bill Number": r.billNumber,
-        "Total Amount (INR)": Number(r.totalAmount.toFixed(2)),
-        "Paid (INR)": Number(r.paymentsApplied.toFixed(2)),
-        "Balance (INR)": Number(
-          Math.max(0, r.totalAmount - r.paymentsApplied).toFixed(2),
-        ),
-        Status: r.status,
-      }));
-
-      const wb = XLSX.utils.book_new();
-      const ws = XLSX.utils.json_to_sheet(exportRows);
-
-      // Append a summary row at the bottom.
-      XLSX.utils.sheet_add_aoa(
-        ws,
-        [
-          [],
-          ["Summary"],
-          ["Bills", summary.totalBills],
-          ["Total billed (INR)", Number(summary.totalBilled.toFixed(2))],
-          ["Collected (INR)", Number(summary.totalCollected.toFixed(2))],
-          ["Overdue (INR)", Number(summary.totalOverdue.toFixed(2))],
-          [],
-          ["Date range", `${filters.dateFrom} to ${filters.dateTo}`],
-          ["Generated", new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })],
-        ],
-        { origin: -1 },
-      );
-
-      // Column widths.
-      ws["!cols"] = [
-        { wch: 14 },
-        { wch: 28 },
-        { wch: 18 },
-        { wch: 16 },
-        { wch: 14 },
-        { wch: 14 },
-        { wch: 12 },
+      // CSV export — Excel opens CSVs natively and we avoid the xlsx
+      // binary dependency (which isn't installed in this environment).
+      const header = [
+        "Bill Date",
+        "Distributor",
+        "Bill Number",
+        "Total Amount (INR)",
+        "Paid (INR)",
+        "Balance (INR)",
+        "Status",
       ];
 
-      XLSX.utils.book_append_sheet(wb, ws, "Billing Report");
-      XLSX.writeFile(
-        wb,
-        `ss-billing-${filters.dateFrom}_to_${filters.dateTo}.xlsx`,
-      );
+      const bodyRows = rows.map((r) => [
+        formatIstDate(r.billDate),
+        r.distributor,
+        r.billNumber,
+        r.totalAmount.toFixed(2),
+        r.paymentsApplied.toFixed(2),
+        Math.max(0, r.totalAmount - r.paymentsApplied).toFixed(2),
+        r.status,
+      ]);
+
+      const trailer: Array<Array<string | number>> = [
+        [],
+        ["Summary"],
+        ["Bills", summary.totalBills],
+        ["Total billed (INR)", summary.totalBilled.toFixed(2)],
+        ["Collected (INR)", summary.totalCollected.toFixed(2)],
+        ["Overdue (INR)", summary.totalOverdue.toFixed(2)],
+        [],
+        ["Date range", `${filters.dateFrom} to ${filters.dateTo}`],
+        [
+          "Generated",
+          new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }),
+        ],
+      ];
+
+      const all: Array<Array<string | number>> = [header, ...bodyRows, ...trailer];
+      const csv =
+        "\uFEFF" +
+        all
+          .map((line) =>
+            line
+              .map((cell) => {
+                const s = cell === null || cell === undefined ? "" : String(cell);
+                return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+              })
+              .join(","),
+          )
+          .join("\r\n");
+
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `ss-billing-${filters.dateFrom}_to_${filters.dateTo}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 500);
     } catch (err) {
       setFetchError(
         err instanceof Error ? `Export failed: ${err.message}` : "Export failed.",
