@@ -27,7 +27,7 @@ import {
   Network,
   X,
   GitBranch,
-  CreditCard,
+  Percent,
   Truck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -121,8 +121,8 @@ const NAV_ITEMS: NavItem[] = [
   // ── FINANCE ───────────────────────────────────────────────────────────────
   {
     href: "/dashboard/pricing",
-    label: "Payments",
-    icon: CreditCard,
+    label: "Pricing Margins",
+    icon: Percent,
     roles: ["super_admin"],
     section: "FINANCE",
   },
