@@ -25,6 +25,9 @@ import {
   Lock,
   Search,
   ChevronDown,
+  CheckCircle2,
+  XCircle,
+  AlertTriangle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -43,6 +46,8 @@ import { ShopPhotoCapture } from "./ShopPhotoCapture";
 import {
   createStore,
   updateStore,
+  approveStore,
+  rejectStore,
   getAreasForZone,
   getDistributorsForArea,
   type StoreRow,
@@ -207,6 +212,25 @@ export function StoreForm({
   const [pending, startTransition] = useTransition();
   const isEdit = Boolean(store);
 
+  // Review mode = SA opening a pending submission. We render the same form
+  // (so SA can correct typos before approving) but show an extra
+  // approve/reject pair in the footer. Pulled out as a derived flag so the
+  // body can use it inline without retesting the conditions.
+  const isReview =
+    isEdit &&
+    callerRole === "super_admin" &&
+    store?.approval_status === "pending" &&
+    Boolean(store?.approval_id);
+
+  // Reject-reason inline form. Kept inside the slide-over rather than as a
+  // separate Dialog so the SA never loses the context of the submission
+  // they're rejecting.
+  const [rejectOpen, setRejectOpen] = useState(false);
+  const [rejectReason, setRejectReason] = useState("");
+  const [reviewBusy, setReviewBusy] = useState<"approve" | "reject" | null>(
+    null
+  );
+
   // ── Field state ────────────────────────────────────────────────────────────
   const [storeName, setStoreName] = useState(store?.name ?? "");
   const [ownerName, setOwnerName] = useState(store?.owner_name ?? "");
@@ -349,6 +373,74 @@ export function StoreForm({
     });
   }
 
+  // ── Approve handler (review mode only) ────────────────────────────────────
+  // Save any pending edits first, then flip approval to 'approved' which the
+  // server-side action also sets is_active=true. We don't auto-save edits to
+  // avoid silent overwrites — if the SA changed fields they explicitly hit
+  // "Save Changes" first; "Approve" on its own approves the submission as-is.
+  async function handleApprove() {
+    if (!isReview || !store?.approval_id) return;
+    setReviewBusy("approve");
+    const result = await approveStore(store.approval_id, store.id);
+    setReviewBusy(null);
+
+    if (!result.success) {
+      toast({
+        title: "Approval failed",
+        description: result.error,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    toast({
+      title: "Store approved",
+      description: `${store.name} is now active.`,
+    });
+    // Caller refreshes the list. We pass approval_status so the local
+    // optimistic update flips the row out of the Pending card.
+    onSuccess({
+      id: store.id,
+      is_active: true,
+      approval_status: "approved",
+    });
+  }
+
+  // ── Reject handler (review mode only) ─────────────────────────────────────
+  async function handleReject() {
+    if (!isReview || !store?.approval_id) return;
+    if (!rejectReason.trim()) {
+      toast({
+        title: "Reason required",
+        description: "Please tell the distributor why this submission is being rejected.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setReviewBusy("reject");
+    const result = await rejectStore(store.approval_id, rejectReason.trim());
+    setReviewBusy(null);
+
+    if (!result.success) {
+      toast({
+        title: "Rejection failed",
+        description: result.error,
+        variant: "destructive",
+      });
+      return;
+    }
+
+    toast({
+      title: "Submission rejected",
+      description: `${store.name} was rejected.`,
+    });
+    onSuccess({
+      id: store.id,
+      is_active: false,
+      approval_status: "rejected",
+    });
+  }
+
   // ─── Render ────────────────────────────────────────────────────────────────
 
   return (
@@ -372,7 +464,11 @@ export function StoreForm({
           <div className="flex items-center gap-2">
             <Store className="h-5 w-5 text-primary" />
             <h2 className="text-lg font-semibold">
-              {isEdit ? "Edit Store" : "Add New Store"}
+              {isReview
+                ? "Review Submission"
+                : isEdit
+                ? "Edit Store"
+                : "Add New Store"}
             </h2>
           </div>
           <button
@@ -385,10 +481,29 @@ export function StoreForm({
           </button>
         </div>
 
-        {/* Distributor notice */}
+        {/* Distributor notice (creating from mobile-equivalent path) */}
         {callerRole === "distributor" && !isEdit && (
           <div className="mx-5 mt-4 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-700 dark:bg-amber-900/20 dark:text-amber-400">
             New stores require Super Admin approval before becoming visible.
+          </div>
+        )}
+
+        {/* Reviewer notice — explains the review workflow to the SA */}
+        {isReview && (
+          <div className="mx-5 mt-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div>
+                <p className="font-medium">
+                  Submitted by{" "}
+                  {store?.distributor_name ?? "the distributor"}
+                </p>
+                <p className="mt-0.5 text-xs">
+                  Make any corrections below if needed, then approve to
+                  activate or reject with a reason.
+                </p>
+              </div>
+            </div>
           </div>
         )}
 
@@ -543,10 +658,14 @@ export function StoreForm({
           />
 
           {/* ── Shop Photo ──────────────────────────────────────────────────── */}
+          {/* In edit mode, seed with the existing photo URL so the SA can
+              see the distributor's submission without being forced to retake.
+              The component treats the seed URL as "captured" — capture
+              callback only fires if the SA actually takes a new photo. */}
           <ShopPhotoCapture
             onCapture={handlePhotoCapture}
             onClear={handlePhotoClear}
-            initialPhotoUrl={null} // thumbnails shown separately in edit
+            initialPhotoUrl={isEdit ? store?.photo_url ?? null : null}
           />
 
           {/* ── Submit guards summary ────────────────────────────────────────── */}
@@ -561,28 +680,116 @@ export function StoreForm({
         </form>
 
         {/* ── Footer ──────────────────────────────────────────────────────────── */}
-        <div className="flex items-center justify-end gap-3 border-t px-5 py-4">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={onClose}
-            disabled={pending}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="submit"
-            form="store-form"
-            disabled={!canSubmit}
-          >
-            {pending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            {isEdit
-              ? "Save Changes"
-              : callerRole === "distributor"
-              ? "Submit for Approval"
-              : "Add Store"}
-          </Button>
-        </div>
+        {/* Two layouts:
+            • Review mode → Reject + Save Edits + Approve (with optional
+              inline reject-reason input that slides above the buttons).
+            • Everything else → Cancel + Save / Add / Submit. */}
+        {isReview ? (
+          <div className="border-t bg-muted/20">
+            {rejectOpen && (
+              <div className="space-y-2 border-b border-amber-200 bg-amber-50/40 px-5 py-3 dark:bg-amber-900/10">
+                <Label htmlFor="reject-reason" className="text-xs">
+                  Rejection reason
+                  <span className="text-destructive"> *</span>
+                </Label>
+                <textarea
+                  id="reject-reason"
+                  value={rejectReason}
+                  onChange={(e) => setRejectReason(e.target.value)}
+                  placeholder="Tell the distributor why — e.g. blurry photo, wrong area, duplicate store…"
+                  rows={2}
+                  className="w-full rounded-md border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                />
+                <div className="flex items-center justify-end gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setRejectOpen(false);
+                      setRejectReason("");
+                    }}
+                    disabled={reviewBusy === "reject"}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="destructive"
+                    onClick={handleReject}
+                    disabled={!rejectReason.trim() || reviewBusy === "reject"}
+                  >
+                    {reviewBusy === "reject" && (
+                      <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                    )}
+                    Confirm Reject
+                  </Button>
+                </div>
+              </div>
+            )}
+            <div className="flex flex-wrap items-center justify-end gap-2 px-5 py-4">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setRejectOpen((v) => !v)}
+                disabled={Boolean(reviewBusy)}
+                className="text-destructive hover:border-destructive/50 hover:text-destructive"
+              >
+                <XCircle className="mr-1.5 h-4 w-4" />
+                Reject
+              </Button>
+              {/* "Save Edits" — submits the same form to update the store
+                  without changing approval status. SA uses this if they
+                  corrected typos but want to keep reviewing. */}
+              <Button
+                type="submit"
+                form="store-form"
+                variant="outline"
+                disabled={!canSubmit || Boolean(reviewBusy)}
+              >
+                {pending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Save Edits
+              </Button>
+              <Button
+                type="button"
+                onClick={handleApprove}
+                disabled={Boolean(reviewBusy) || pending}
+                className="bg-emerald-600 text-white shadow-sm hover:bg-emerald-700"
+              >
+                {reviewBusy === "approve" ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="mr-1.5 h-4 w-4" />
+                )}
+                Approve
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center justify-end gap-3 border-t px-5 py-4">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={onClose}
+              disabled={pending}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              form="store-form"
+              disabled={!canSubmit}
+            >
+              {pending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {isEdit
+                ? "Save Changes"
+                : callerRole === "distributor"
+                ? "Submit for Approval"
+                : "Add Store"}
+            </Button>
+          </div>
+        )}
       </aside>
     </>
   );

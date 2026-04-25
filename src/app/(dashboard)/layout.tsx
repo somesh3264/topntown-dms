@@ -81,7 +81,20 @@ export default async function DashboardLayout({
 
   const displayName = profile?.full_name ?? user.email ?? "User";
 
-  // ── 4. Render ──────────────────────────────────────────────────────────────
+  // ── 4. Pending-approval count for the sidebar badge (SA only) ─────────────
+  // We compute this once per layout render so every dashboard page shows the
+  // current count without each page having to refetch. Counted via head:true
+  // (no row payload, just the count) to keep the query cheap.
+  let pendingApprovalCount = 0;
+  if (effectiveRole === "super_admin") {
+    const { count } = await supabase
+      .from("store_approval_requests")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "pending");
+    pendingApprovalCount = count ?? 0;
+  }
+
+  // ── 5. Render ──────────────────────────────────────────────────────────────
   return (
     <>
       {/*
@@ -97,7 +110,11 @@ export default async function DashboardLayout({
         Receives server-fetched data as plain props and owns the mobile
         sidebar open/close state.
       */}
-      <DashboardShell role={effectiveRole} displayName={displayName}>
+      <DashboardShell
+        role={effectiveRole}
+        displayName={displayName}
+        pendingApprovalCount={pendingApprovalCount}
+      >
         {children}
       </DashboardShell>
     </>

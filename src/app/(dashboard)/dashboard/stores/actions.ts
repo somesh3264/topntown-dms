@@ -53,6 +53,18 @@ export interface StoreRow {
   is_active: boolean;
   onboarded_by: string;
   created_at: string;
+  /**
+   * Approval lifecycle of the latest store_approval_requests row, if any.
+   * - "pending": distributor submitted, SA hasn't reviewed yet
+   * - "approved": SA approved (mirrors is_active=true after activation)
+   * - "rejected": SA declined; rejection_reason carries the message
+   * - null: store was created directly by SA/SP (no approval row exists)
+   */
+  approval_status: "pending" | "approved" | "rejected" | null;
+  /** Approval row id — needed to deep-link the Review button. */
+  approval_id: string | null;
+  /** Latest uploaded shop photo URL. Used by the edit form so SA isn't forced to re-take. */
+  photo_url: string | null;
 }
 
 export interface ApprovalRow {
@@ -94,6 +106,9 @@ export async function getStores(filters?: {
 }): Promise<StoreRow[]> {
   const supabase = createClient();
 
+  // Pull approval status + photo URL alongside each store. The two related
+  // tables are LEFT joined so stores without an approval row (created
+  // directly by SA/SP) and stores without a photo still come through.
   let query = supabase.from("stores").select(`
     id,
     name,
@@ -113,7 +128,9 @@ export async function getStores(filters?: {
       zone_id,
       zones:zone_id ( id, name )
     ),
-    profiles:primary_distributor_id ( full_name )
+    profiles:primary_distributor_id ( full_name ),
+    store_approval_requests ( id, status, created_at ),
+    store_photos!store_photos_store_id_fkey ( photo_url )
   `);
 
   if (filters?.areaId) {
@@ -147,24 +164,54 @@ export async function getStores(filters?: {
     return [];
   }
 
-  return (data ?? []).map((row: any) => ({
-    id: row.id,
-    name: row.name,
-    owner_name: row.owner_name,
-    phone: row.phone,
-    address: row.address,
-    gps_lat: row.gps_lat,
-    gps_lng: row.gps_lng,
-    area_id: row.area_id,
-    area_name: row.areas?.name ?? null,
-    zone_id: row.areas?.zone_id ?? null,
-    zone_name: row.areas?.zones?.name ?? null,
-    primary_distributor_id: row.primary_distributor_id,
-    distributor_name: row.profiles?.full_name ?? null,
-    is_active: row.is_active,
-    onboarded_by: row.onboarded_by,
-    created_at: row.created_at,
-  }));
+  return (data ?? []).map((row: any) => {
+    // PostgREST returns 1:M joins as arrays. Pick the most recent row from
+    // each — sorted client-side (the result set is small per store).
+    const approvals: Array<{ id: string; status: string; created_at: string }> =
+      Array.isArray(row.store_approval_requests)
+        ? row.store_approval_requests
+        : row.store_approval_requests
+        ? [row.store_approval_requests]
+        : [];
+    const latestApproval =
+      approvals
+        .slice()
+        .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))[0] ?? null;
+
+    // We don't know whether store_photos has a sortable timestamp column on
+    // every deployment, so just take the first row — for a single-photo
+    // workflow that's the only row, and for multi-photo it's "good enough"
+    // until someone implements a gallery picker.
+    const photos: Array<{ photo_url: string }> = Array.isArray(row.store_photos)
+      ? row.store_photos
+      : row.store_photos
+      ? [row.store_photos]
+      : [];
+    const latestPhoto = photos[0] ?? null;
+
+    return {
+      id: row.id,
+      name: row.name,
+      owner_name: row.owner_name,
+      phone: row.phone,
+      address: row.address,
+      gps_lat: row.gps_lat,
+      gps_lng: row.gps_lng,
+      area_id: row.area_id,
+      area_name: row.areas?.name ?? null,
+      zone_id: row.areas?.zone_id ?? null,
+      zone_name: row.areas?.zones?.name ?? null,
+      primary_distributor_id: row.primary_distributor_id,
+      distributor_name: row.profiles?.full_name ?? null,
+      is_active: row.is_active,
+      onboarded_by: row.onboarded_by,
+      created_at: row.created_at,
+      approval_status:
+        (latestApproval?.status as StoreRow["approval_status"]) ?? null,
+      approval_id: latestApproval?.id ?? null,
+      photo_url: latestPhoto?.photo_url ?? null,
+    } satisfies StoreRow;
+  });
 }
 
 /**

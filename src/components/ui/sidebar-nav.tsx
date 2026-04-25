@@ -174,6 +174,12 @@ export interface SidebarNavProps {
   displayName?: string;
   mobileOpen?: boolean;
   onMobileClose?: () => void;
+  /**
+   * Pending store-approval count. Drives the small amber badge on the
+   * "Retail Stores" nav item — SA only. The layout passes 0 for any
+   * other role, in which case nothing is rendered.
+   */
+  pendingApprovalCount?: number;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -183,6 +189,7 @@ export function SidebarNav({
   displayName,
   mobileOpen = false,
   onMobileClose,
+  pendingApprovalCount = 0,
 }: SidebarNavProps) {
   const pathname = usePathname();
 
@@ -260,6 +267,13 @@ export function SidebarNav({
               <ul className="space-y-0.5">
                 {section.items.map(({ href, label, icon: Icon }) => {
                   const active = isActive(href);
+                  // Only the Retail Stores entry shows a pending count today.
+                  // If we ever add more "needs attention" badges, swap this
+                  // out for a small map keyed by href.
+                  const showBadge =
+                    href === "/dashboard/stores" &&
+                    role === "super_admin" &&
+                    pendingApprovalCount > 0;
                   return (
                     <li key={href}>
                       <Link
@@ -274,7 +288,15 @@ export function SidebarNav({
                         )}
                       >
                         <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
-                        {label}
+                        <span className="flex-1">{label}</span>
+                        {showBadge && (
+                          <span
+                            className="inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-amber-500 px-1.5 text-[10px] font-bold text-white shadow-sm"
+                            aria-label={`${pendingApprovalCount} pending approvals`}
+                          >
+                            {pendingApprovalCount}
+                          </span>
+                        )}
                       </Link>
                     </li>
                   );

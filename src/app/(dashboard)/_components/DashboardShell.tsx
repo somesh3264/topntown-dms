@@ -56,6 +56,8 @@ function formatCurrentDate(): string {
 interface DashboardShellProps {
   role: UserRole;
   displayName: string;
+  /** Pending store-approval count — drives the sidebar badge. SA only. */
+  pendingApprovalCount?: number;
   children: React.ReactNode;
 }
 
@@ -64,6 +66,7 @@ interface DashboardShellProps {
 export function DashboardShell({
   role,
   displayName,
+  pendingApprovalCount = 0,
   children,
 }: DashboardShellProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -88,6 +91,7 @@ export function DashboardShell({
         displayName={displayName}
         mobileOpen={sidebarOpen}
         onMobileClose={() => setSidebarOpen(false)}
+        pendingApprovalCount={pendingApprovalCount}
       />
 
       {/* ── Right column ──────────────────────────────────────────────────── */}

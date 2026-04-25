@@ -23,6 +23,8 @@ import {
   ToggleRight,
   Store,
   Filter,
+  Clock,
+  Eye,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -50,9 +52,13 @@ interface StoreDirectoryClientProps {
   initialStores: StoreRow[];
   zones: { id: string; name: string }[];
   callerRole: AppRole;
-  pendingApprovalCount: number;
+  // pendingApprovalCount used to drive the top banner; now the count comes
+  // from `pendingStores.length` which is derived locally from the same store
+  // list, so the prop is no longer needed.
 }
 
+// "pending" used to be a status filter; now it's its own section above the
+// directory so the dropdown only governs the main (non-pending) list.
 type StatusFilter = "all" | "active" | "inactive";
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -61,7 +67,6 @@ export function StoreDirectoryClient({
   initialStores,
   zones,
   callerRole,
-  pendingApprovalCount,
 }: StoreDirectoryClientProps) {
   const { toast } = useToast();
 
@@ -89,26 +94,51 @@ export function StoreDirectoryClient({
     setFilterAreaId("all");
   }, [filterZoneId]);
 
-  // ── Derived filtered list ─────────────────────────────────────────────────
-  const filtered = useMemo(() => {
+  // ── Derived split lists ───────────────────────────────────────────────────
+  // The directory is rendered as two separate tables for SA users:
+  //   • pendingStores → top card, shown whenever SA has any pending approvals.
+  //     Filters (zone/area/search) still apply so the queue stays scoped.
+  //   • mainStores → bottom card, everything that's NOT pending. The Status
+  //     filter only narrows this list (Active/Inactive/All).
+  // Non-SA roles see only the main list (no pending section); pending stores
+  // never appear in their RLS scope anyway.
+  const sharedFilter = (s: StoreRow) => {
+    if (filterAreaId !== "all" && s.area_id !== filterAreaId) return false;
+    if (
+      filterZoneId !== "all" &&
+      filterAreaId === "all" &&
+      s.zone_id !== filterZoneId
+    )
+      return false;
+    if (
+      search.trim() &&
+      !s.name.toLowerCase().includes(search.trim().toLowerCase())
+    )
+      return false;
+    return true;
+  };
+
+  const pendingStores = useMemo(() => {
+    if (callerRole !== "super_admin") return [] as StoreRow[];
+    return stores.filter(
+      (s) => s.approval_status === "pending" && sharedFilter(s)
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stores, callerRole, filterAreaId, filterZoneId, search]);
+
+  const mainStores = useMemo(() => {
     return stores.filter((s) => {
-      if (filterAreaId !== "all" && s.area_id !== filterAreaId) return false;
-      if (
-        filterZoneId !== "all" &&
-        filterAreaId === "all" &&
-        s.zone_id !== filterZoneId
-      )
+      // Pending stores live in their own card for SA — exclude them here.
+      if (callerRole === "super_admin" && s.approval_status === "pending") {
         return false;
+      }
+      if (!sharedFilter(s)) return false;
       if (filterStatus === "active" && !s.is_active) return false;
       if (filterStatus === "inactive" && s.is_active) return false;
-      if (
-        search.trim() &&
-        !s.name.toLowerCase().includes(search.trim().toLowerCase())
-      )
-        return false;
       return true;
     });
-  }, [stores, filterAreaId, filterZoneId, filterStatus, search]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stores, callerRole, filterStatus, filterAreaId, filterZoneId, search]);
 
   // ── Deactivate / Activate ─────────────────────────────────────────────────
   const [togglingId, setTogglingId] = useState<string | null>(null);
@@ -148,7 +178,10 @@ export function StoreDirectoryClient({
       if (exists) {
         return prev.map((s) => (s.id === updated.id ? { ...s, ...updated } : s));
       }
-      // New store — prepend
+      // New store — prepend.
+      // Approval status is null for SA/SP-created stores (no approval row);
+      // photo URL is unknown client-side because uploads happen server-side
+      // — the next page refresh will pick up the real values.
       return [
         {
           id: updated.id,
@@ -167,6 +200,9 @@ export function StoreDirectoryClient({
           is_active: updated.is_active ?? true,
           onboarded_by: updated.onboarded_by ?? "",
           created_at: updated.created_at ?? new Date().toISOString(),
+          approval_status: updated.approval_status ?? null,
+          approval_id: updated.approval_id ?? null,
+          photo_url: updated.photo_url ?? null,
         },
         ...prev,
       ];
@@ -179,27 +215,9 @@ export function StoreDirectoryClient({
 
   return (
     <>
-      {/* ── Pending Approvals Banner (SA only) ──────────────────────────────── */}
-      {callerRole === "super_admin" && pendingApprovalCount > 0 && (
-        <a
-          href="/dashboard/stores/approvals"
-          className="flex items-center justify-between rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 shadow-sm transition-colors hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300"
-        >
-          <div className="flex items-center gap-2">
-            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-amber-500 text-[10px] font-bold text-white">
-              {pendingApprovalCount}
-            </span>
-            <span>
-              {pendingApprovalCount === 1
-                ? "1 store pending approval"
-                : `${pendingApprovalCount} stores pending approval`}
-            </span>
-          </div>
-          <span className="font-medium underline underline-offset-2">
-            Review →
-          </span>
-        </a>
-      )}
+      {/* The pending-approvals banner that used to live here is now replaced by
+          the dedicated Pending Approvals card below — same information, with
+          actionable rows instead of a link out to a separate page. */}
 
       {/* ── Toolbar ──────────────────────────────────────────────────────────── */}
       <div className="flex flex-wrap items-end gap-3">
@@ -278,76 +296,51 @@ export function StoreDirectoryClient({
         </Button>
       </div>
 
-      {/* ── Table ────────────────────────────────────────────────────────────── */}
-      <div className="rounded-xl border bg-card shadow-sm overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b bg-muted/40">
-                <th className="px-4 py-3 text-left font-semibold text-muted-foreground">
-                  Store Name
-                </th>
-                <th className="px-4 py-3 text-left font-semibold text-muted-foreground">
-                  Owner
-                </th>
-                <th className="px-4 py-3 text-left font-semibold text-muted-foreground">
-                  Phone
-                </th>
-                <th className="px-4 py-3 text-left font-semibold text-muted-foreground">
-                  Area
-                </th>
-                <th className="px-4 py-3 text-left font-semibold text-muted-foreground">
-                  Distributor
-                </th>
-                <th className="px-4 py-3 text-center font-semibold text-muted-foreground">
-                  GPS
-                </th>
-                <th className="px-4 py-3 text-left font-semibold text-muted-foreground">
-                  Status
-                </th>
-                <th className="px-4 py-3 text-right font-semibold text-muted-foreground">
-                  Actions
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y">
-              {filtered.length === 0 ? (
-                <tr>
-                  <td
-                    colSpan={8}
-                    className="px-4 py-16 text-center text-muted-foreground"
-                  >
-                    <Store className="mx-auto mb-2 h-8 w-8 opacity-30" />
-                    No stores found.
-                    {(search || filterZoneId !== "all" || filterStatus !== "all") && (
-                      <p className="mt-1 text-xs">
-                        Try clearing your filters.
-                      </p>
-                    )}
-                  </td>
-                </tr>
-              ) : (
-                filtered.map((store) => (
-                  <StoreTableRow
-                    key={store.id}
-                    store={store}
-                    callerRole={callerRole}
-                    toggling={togglingId === store.id}
-                    onEdit={() => setEditTarget(store)}
-                    onToggleActive={() => handleToggleActive(store)}
-                  />
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+      {/* ── Pending Approvals card (SA only, only if there are any) ─────────── */}
+      {callerRole === "super_admin" && pendingStores.length > 0 && (
+        <StoreTableCard
+          title="Pending Approvals"
+          subtitle={
+            pendingStores.length === 1
+              ? "1 store waiting for your review"
+              : `${pendingStores.length} stores waiting for your review`
+          }
+          accent="amber"
+          stores={pendingStores}
+          callerRole={callerRole}
+          togglingId={togglingId}
+          onEdit={(s) => setEditTarget(s)}
+          onToggleActive={(s) => handleToggleActive(s)}
+          // Empty-state copy not needed here — the card is only mounted when
+          // pendingStores.length > 0.
+          emptyHint=""
+          countSuffix="pending"
+        />
+      )}
 
-        {/* Footer count */}
-        <div className="border-t px-4 py-2 text-xs text-muted-foreground">
-          {filtered.length} of {stores.length} store
-          {stores.length !== 1 ? "s" : ""}
-        </div>
-      </div>
+      {/* ── Main directory ──────────────────────────────────────────────────── */}
+      <StoreTableCard
+        title={callerRole === "super_admin" ? "All Stores" : undefined}
+        subtitle={undefined}
+        accent="default"
+        stores={mainStores}
+        callerRole={callerRole}
+        togglingId={togglingId}
+        onEdit={(s) => setEditTarget(s)}
+        onToggleActive={(s) => handleToggleActive(s)}
+        emptyHint={
+          search || filterZoneId !== "all" || filterStatus !== "all"
+            ? "Try clearing your filters."
+            : ""
+        }
+        // Show "X of Y" relative to the non-pending universe so it doesn't
+        // double-count rows with the pending card above.
+        countSuffix={
+          callerRole === "super_admin"
+            ? `of ${stores.filter((s) => s.approval_status !== "pending").length}`
+            : `of ${stores.length}`
+        }
+      />
 
       {/* ── Slide-over: Add Store ─────────────────────────────────────────────── */}
       {addOpen && (
@@ -370,6 +363,154 @@ export function StoreDirectoryClient({
         />
       )}
     </>
+  );
+}
+
+// ─── Reusable Table Card ──────────────────────────────────────────────────────
+//
+// Wraps the store table in a card with an optional title bar. We render this
+// twice on the page (Pending Approvals on top, All Stores below) to keep the
+// two queues visually separate without duplicating ~60 lines of <table>.
+
+interface StoreTableCardProps {
+  title?: string;
+  subtitle?: string;
+  /** "amber" gives the pending card an amber-tinted header strip. */
+  accent: "amber" | "default";
+  stores: StoreRow[];
+  callerRole: AppRole;
+  togglingId: string | null;
+  onEdit: (s: StoreRow) => void;
+  onToggleActive: (s: StoreRow) => void;
+  emptyHint: string;
+  countSuffix: string;
+}
+
+function StoreTableCard({
+  title,
+  subtitle,
+  accent,
+  stores,
+  callerRole,
+  togglingId,
+  onEdit,
+  onToggleActive,
+  emptyHint,
+  countSuffix,
+}: StoreTableCardProps) {
+  return (
+    <div
+      className={cn(
+        "rounded-xl border bg-card shadow-sm overflow-hidden",
+        accent === "amber" && "border-amber-200 dark:border-amber-700/50"
+      )}
+    >
+      {/* Header strip — only when we have a title. The pending card always
+          shows a header so the SA's eye lands there first. */}
+      {title && (
+        <div
+          className={cn(
+            "flex items-center justify-between border-b px-4 py-3",
+            accent === "amber"
+              ? "bg-amber-50 dark:bg-amber-900/10"
+              : "bg-muted/30"
+          )}
+        >
+          <div>
+            <h2
+              className={cn(
+                "text-sm font-semibold",
+                accent === "amber"
+                  ? "text-amber-800 dark:text-amber-300"
+                  : "text-foreground"
+              )}
+            >
+              {title}
+            </h2>
+            {subtitle && (
+              <p
+                className={cn(
+                  "text-xs",
+                  accent === "amber"
+                    ? "text-amber-700/80 dark:text-amber-400/80"
+                    : "text-muted-foreground"
+                )}
+              >
+                {subtitle}
+              </p>
+            )}
+          </div>
+          {accent === "amber" && (
+            <span className="inline-flex h-6 items-center gap-1 rounded-full bg-amber-500 px-2 text-[11px] font-bold text-white">
+              <Clock className="h-3 w-3" />
+              {stores.length}
+            </span>
+          )}
+        </div>
+      )}
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b bg-muted/40">
+              <th className="px-4 py-3 text-left font-semibold text-muted-foreground">
+                Store Name
+              </th>
+              <th className="px-4 py-3 text-left font-semibold text-muted-foreground">
+                Owner
+              </th>
+              <th className="px-4 py-3 text-left font-semibold text-muted-foreground">
+                Phone
+              </th>
+              <th className="px-4 py-3 text-left font-semibold text-muted-foreground">
+                Area
+              </th>
+              <th className="px-4 py-3 text-left font-semibold text-muted-foreground">
+                Distributor
+              </th>
+              <th className="px-4 py-3 text-center font-semibold text-muted-foreground">
+                GPS
+              </th>
+              <th className="px-4 py-3 text-left font-semibold text-muted-foreground">
+                Status
+              </th>
+              <th className="px-4 py-3 text-right font-semibold text-muted-foreground">
+                Actions
+              </th>
+            </tr>
+          </thead>
+          <tbody className="divide-y">
+            {stores.length === 0 ? (
+              <tr>
+                <td
+                  colSpan={8}
+                  className="px-4 py-16 text-center text-muted-foreground"
+                >
+                  <Store className="mx-auto mb-2 h-8 w-8 opacity-30" />
+                  No stores found.
+                  {emptyHint && <p className="mt-1 text-xs">{emptyHint}</p>}
+                </td>
+              </tr>
+            ) : (
+              stores.map((store) => (
+                <StoreTableRow
+                  key={store.id}
+                  store={store}
+                  callerRole={callerRole}
+                  toggling={togglingId === store.id}
+                  onEdit={() => onEdit(store)}
+                  onToggleActive={() => onToggleActive(store)}
+                />
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="border-t px-4 py-2 text-xs text-muted-foreground">
+        {stores.length} {countSuffix}
+      </div>
+    </div>
   );
 }
 
@@ -455,29 +596,51 @@ function StoreTableRow({
         )}
       </td>
 
-      {/* Status */}
+      {/* Status — three-state pill: Pending / Active / Inactive.
+          Pending takes priority over is_active because a freshly-submitted
+          mobile store has is_active = false AND approval_status = 'pending'
+          — we want it to render as "Pending Approval" rather than just
+          "Inactive". A rejected store still shows as Inactive (it was
+          declined, not waiting). */}
       <td className="px-4 py-3">
-        <span
-          className={cn(
-            "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold",
-            store.is_active
-              ? "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400"
-              : "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
-          )}
-        >
-          <span
-            className={cn(
-              "h-1.5 w-1.5 rounded-full",
-              store.is_active ? "bg-green-500" : "bg-red-500"
-            )}
-          />
-          {store.is_active ? "Active" : "Inactive"}
-        </span>
+        {store.approval_status === "pending" ? (
+          <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+            <Clock className="h-3 w-3" />
+            Pending Approval
+          </span>
+        ) : store.is_active ? (
+          <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-[11px] font-semibold text-green-700 dark:bg-green-900/30 dark:text-green-400">
+            <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+            Active
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-semibold text-red-700 dark:bg-red-900/30 dark:text-red-400">
+            <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
+            Inactive
+          </span>
+        )}
       </td>
 
       {/* Actions */}
       <td className="px-4 py-3">
         <div className="flex items-center justify-end gap-1.5">
+          {/* Review — opens the edit slide-over with all distributor-submitted
+              details (form fields + photo). The form detects approval_status
+              === 'pending' and adds Approve / Reject CTAs to its footer, so
+              the SA can edit-and-approve in one place without leaving the
+              directory. */}
+          {callerRole === "super_admin" && store.approval_status === "pending" && (
+            <Button
+              size="sm"
+              onClick={onEdit}
+              className="h-7 gap-1 bg-amber-600 px-3 text-xs font-medium text-white shadow-sm hover:bg-amber-700"
+              title="Review and approve / reject this submission"
+            >
+              <Eye className="h-3.5 w-3.5" />
+              Review
+            </Button>
+          )}
+
           {/* Edit */}
           {canModify && (
             <Button
@@ -491,8 +654,10 @@ function StoreTableRow({
             </Button>
           )}
 
-          {/* Activate / Deactivate */}
-          {callerRole === "super_admin" && (
+          {/* Activate / Deactivate — hidden for pending rows; the Approve flow
+              on the approvals page handles activation, and a manual toggle
+              here would short-circuit the workflow. */}
+          {callerRole === "super_admin" && store.approval_status !== "pending" && (
             <Button
               variant="outline"
               size="sm"

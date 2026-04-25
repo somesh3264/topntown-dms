@@ -17,7 +17,6 @@ import {
   getStores,
   getZonesForSelect,
   getMyProfile,
-  getStoreApprovals,
 } from "./actions";
 import { StoreDirectoryClient } from "./_components/StoreDirectoryClient";
 
@@ -25,6 +24,10 @@ export const metadata: Metadata = { title: "Store Directory" };
 export const dynamic = "force-dynamic";
 
 export default async function StoresPage() {
+  // Pending count is derived client-side from the store list — getStores now
+  // returns approval_status with each row, so a separate count fetch isn't
+  // needed for the page itself. The sidebar still does its own count via the
+  // dashboard layout to keep that lookup independent of this page's data.
   const [profile, stores, zones] = await Promise.all([
     getMyProfile(),
     getStores(),
@@ -32,13 +35,6 @@ export default async function StoresPage() {
   ]);
 
   const callerRole = profile?.role ?? "sales_person";
-
-  // Only SA needs the pending count for the approval banner
-  let pendingApprovalCount = 0;
-  if (callerRole === "super_admin") {
-    const pending = await getStoreApprovals("pending");
-    pendingApprovalCount = pending.length;
-  }
 
   return (
     <div className="space-y-6">
@@ -60,7 +56,6 @@ export default async function StoresPage() {
         initialStores={stores}
         zones={zones}
         callerRole={callerRole}
-        pendingApprovalCount={pendingApprovalCount}
       />
     </div>
   );
